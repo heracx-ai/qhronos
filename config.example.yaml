@@ -1,0 +1,19 @@
+server:
+  port: 8080
+
+database:
+  host: localhost
+  port: 5432
+  user: postgres
+  password: postgres
+  dbname: qhronos
+
+redis:
+  host: localhost
+  port: 6379
+  password: ""
+  db: 0
+
+auth:
+  master_token: "your-master-token-here"
+  jwt_secret: "your-jwt-secret-here" 
