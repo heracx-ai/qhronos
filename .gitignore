@@ -32,6 +32,7 @@ config.yaml
 config.*.yaml
 !config.example.yaml
 
-# Docker data
-docker/postgres/data/
-docker/redis/data/ 
+# Data directories
+data/
+data/postgres/
+data/redis/ 

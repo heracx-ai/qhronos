@@ -19,7 +19,7 @@ Notification and Scheduling for AI Agents
 
 ## Service Management
 
-The project includes scripts to manage PostgreSQL and Redis in Docker. The data is stored in the respective `docker` directories.
+The project uses Docker Compose to manage PostgreSQL and Redis services. Data is persisted in the `data` directory.
 
 ### Database Management
 
@@ -66,7 +66,7 @@ The project includes scripts to manage PostgreSQL and Redis in Docker. The data 
 
 #### Database
 - Host: localhost
-- Port: 5432
+- Port: 5433
 - User: postgres
 - Password: postgres
 - Database: qhronos
@@ -89,7 +89,7 @@ server:
 
 database:
   host: localhost
-  port: 5432
+  port: 5433
   user: postgres
   password: postgres
   dbname: qhronos
@@ -123,16 +123,14 @@ qhronos/
 │   ├── auth/           # Authentication package
 │   ├── database/       # Database package
 │   └── redis/          # Redis package
-├── docker/
-│   ├── postgres/
-│   │   └── data/       # PostgreSQL data directory
-│   └── redis/
-│       └── data/       # Redis data directory
+├── data/
+│   ├── postgres/       # PostgreSQL data directory
+│   └── redis/         # Redis data directory
 ├── scripts/
-│   ├── db.sh           # Database management script
-│   └── redis.sh        # Redis management script
-├── migrations/         # Database migrations
-└── tests/             # Test files
+│   ├── db.sh          # Database management script
+│   └── redis.sh       # Redis management script
+├── migrations/        # Database migrations
+└── tests/            # Test files
 ```
 
 ## Development
