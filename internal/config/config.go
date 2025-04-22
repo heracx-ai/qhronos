@@ -2,7 +2,9 @@ package config
 
 import (
 	"fmt"
+	"time"
 
+	"github.com/feedloop/qhronos/internal/database"
 	"github.com/spf13/viper"
 )
 
@@ -11,10 +13,12 @@ type Config struct {
 	Database DatabaseConfig `mapstructure:"database"`
 	Redis    RedisConfig    `mapstructure:"redis"`
 	Auth     AuthConfig     `mapstructure:"auth"`
+	HMAC     HMACConfig     `mapstructure:"hmac"`
 }
 
 type ServerConfig struct {
-	Port int `mapstructure:"port"`
+	Port    int           `mapstructure:"port"`
+	Timeout time.Duration `mapstructure:"timeout"`
 }
 
 type DatabaseConfig struct {
@@ -23,6 +27,7 @@ type DatabaseConfig struct {
 	User     string `mapstructure:"user"`
 	Password string `mapstructure:"password"`
 	DBName   string `mapstructure:"dbname"`
+	SSLMode  string `mapstructure:"sslmode"`
 }
 
 type RedisConfig struct {
@@ -37,16 +42,39 @@ type AuthConfig struct {
 	JWTSecret   string `mapstructure:"jwt_secret"`
 }
 
-func LoadConfig() (*Config, error) {
+type HMACConfig struct {
+	DefaultSecret string `mapstructure:"default_secret"`
+}
+
+func Load() (*Config, error) {
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
 	viper.AddConfigPath(".")
 	viper.AddConfigPath("./config")
 
+	// Set default values
+	viper.SetDefault("server.port", 8080)
+	viper.SetDefault("server.timeout", "30s")
+	viper.SetDefault("database.host", "localhost")
+	viper.SetDefault("database.port", 5432)
+	viper.SetDefault("database.user", "postgres")
+	viper.SetDefault("database.password", "postgres")
+	viper.SetDefault("database.dbname", "qhronos")
+	viper.SetDefault("database.sslmode", "disable")
+	viper.SetDefault("redis.host", "localhost")
+	viper.SetDefault("redis.port", 6379)
+	viper.SetDefault("redis.password", "")
+	viper.SetDefault("redis.db", 0)
+	viper.SetDefault("hmac.default_secret", "qhronos.io")
+
+	// Read environment variables
 	viper.AutomaticEnv()
 
+	// Read config file
 	if err := viper.ReadInConfig(); err != nil {
-		return nil, fmt.Errorf("error reading config file: %w", err)
+		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
+			return nil, fmt.Errorf("error reading config file: %w", err)
+		}
 	}
 
 	config := &Config{}
@@ -55,4 +83,16 @@ func LoadConfig() (*Config, error) {
 	}
 
 	return config, nil
+}
+
+// ToDBConfig converts DatabaseConfig to database.Config
+func (c DatabaseConfig) ToDBConfig() database.Config {
+	return database.Config{
+		Host:     c.Host,
+		Port:     c.Port,
+		User:     c.User,
+		Password: c.Password,
+		DBName:   c.DBName,
+		SSLMode:  c.SSLMode,
+	}
 } 

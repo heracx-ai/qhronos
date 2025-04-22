@@ -39,16 +39,25 @@ INSERT INTO system_config (key, value, description, updated_by) VALUES
 -- Events table with scheduling constraints
 CREATE TABLE events (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    title TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT,
     start_time TIMESTAMP WITH TIME ZONE NOT NULL,
     webhook_url TEXT NOT NULL,
-    payload JSONB NOT NULL DEFAULT '{}',
-    recurrence TEXT,
+    metadata JSONB NOT NULL DEFAULT '{}',
+    schedule TEXT,
     tags TEXT[] NOT NULL DEFAULT '{}',
     status TEXT NOT NULL DEFAULT 'active',
+    hmac_secret TEXT,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE
 );
+
+-- Add comments to events table
+COMMENT ON COLUMN events.name IS 'Event name';
+COMMENT ON COLUMN events.description IS 'Event description';
+COMMENT ON COLUMN events.schedule IS 'iCalendar (RFC 5545) recurrence rule';
+COMMENT ON COLUMN events.metadata IS 'Event metadata in JSONB format';
+COMMENT ON COLUMN events.hmac_secret IS 'Custom HMAC secret for webhook signing. If null, uses default secret.';
 
 -- Occurrences table with retention tracking
 CREATE TABLE occurrences (
@@ -58,8 +67,27 @@ CREATE TABLE occurrences (
     status TEXT NOT NULL DEFAULT 'pending',
     last_attempt TIMESTAMP WITH TIME ZONE,
     attempt_count INTEGER NOT NULL DEFAULT 0,
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Add comment to occurrences table
+COMMENT ON COLUMN occurrences.updated_at IS 'Last update timestamp of the occurrence';
+
+-- Create trigger function to update updated_at column
+CREATE OR REPLACE FUNCTION update_occurrences_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Create trigger to call the function before update
+CREATE TRIGGER update_occurrences_updated_at_trigger
+    BEFORE UPDATE ON occurrences
+    FOR EACH ROW
+    EXECUTE FUNCTION update_occurrences_updated_at();
 
 -- Webhook delivery attempts with retention period
 CREATE TABLE webhook_attempts (
@@ -139,11 +167,12 @@ CREATE TABLE performance_metrics (
 -- Archived events
 CREATE TABLE archived_events (
     id UUID PRIMARY KEY,
-    title TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT,
     start_time TIMESTAMPTZ NOT NULL,
     webhook_url TEXT NOT NULL,
-    payload JSONB NOT NULL,
-    recurrence TEXT,
+    metadata JSONB NOT NULL,
+    schedule TEXT,
     tags TEXT[],
     status TEXT,
     created_at TIMESTAMPTZ,
@@ -187,6 +216,8 @@ CREATE TABLE archived_webhook_attempts (
 CREATE INDEX idx_events_status ON events(status);
 CREATE INDEX idx_events_tags ON events USING GIN(tags);
 CREATE INDEX idx_events_created_at ON events(created_at);
+CREATE INDEX idx_events_schedule ON events(schedule);
+CREATE INDEX idx_events_metadata ON events USING GIN(metadata);
 
 -- Occurrences indexes
 CREATE INDEX idx_occurrences_event_id ON occurrences(event_id);
@@ -246,9 +277,8 @@ BEGIN
     -- Then archive events that have no active occurrences
     INSERT INTO archived_events
     SELECT 
-        id, title, start_time, webhook_url, payload,
-        recurrence, tags, status, created_at, updated_at,
-        now(), id
+        id, name, description, start_time, webhook_url, metadata,
+        schedule, tags, status, created_at, updated_at, now(), id
     FROM events e
     WHERE NOT EXISTS (
         SELECT 1 FROM occurrences o 
@@ -256,7 +286,6 @@ BEGIN
         AND o.scheduled_at >= (now() - event_retention)
     );
 
-    -- Delete archived data
     DELETE FROM occurrences
     WHERE scheduled_at < (now() - event_retention);
 

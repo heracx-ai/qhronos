@@ -2,9 +2,113 @@
 
 Notification and Scheduling for AI Agents
 
-## Quick Start Tutorial
+## Overview
 
-This tutorial will guide you through setting up and running Qhronos on your local machine.
+Qhronos is a robust scheduling and notification service specifically designed for AI agents and automated systems. It provides a comprehensive API for managing events, schedules, and notifications with enterprise-grade features and reliability.
+
+Key aspects of Qhronos include:
+
+- **Advanced Scheduling**: Implements iCalendar recurrence rules (RFC 5545) for complex scheduling patterns, supporting:
+  - Recurring events with flexible intervals
+  - Day-of-week and day-of-month specifications
+  - Timezone-aware scheduling
+  - Exception dates and modifications
+
+- **Webhook Integration**: Seamless integration with external systems through:
+  - Configurable webhook endpoints
+  - Automatic event trigger dispatching
+  - Retry mechanisms for failed deliveries
+  - Custom payload formatting
+
+- **Security and Access Control**:
+  - Two-tier authentication system (Master Token + JWT)
+  - Role-based access control (RBAC)
+  - Fine-grained permission management
+  - Token-based API security
+
+- **Data Management**:
+  - PostgreSQL-backed durable storage
+  - Event metadata support for custom data
+  - Tag-based organization and filtering
+  - Comprehensive event history tracking
+
+- **Enterprise Features**:
+  - High availability design
+  - Scalable architecture
+  - Comprehensive API documentation
+  - Detailed error handling and logging
+  - Rate limiting and request validation
+
+Qhronos is particularly well-suited for:
+- AI agent scheduling and coordination
+- Automated system orchestration
+- Enterprise workflow automation
+- Distributed system event management
+- Multi-tenant scheduling applications
+
+### Core Capabilities
+
+- **Advanced Scheduling**: Implements iCalendar (RFC 5545) recurrence rules for complex scheduling patterns, supporting:
+  - Recurring events with flexible intervals
+  - Day-of-week and day-of-month patterns
+  - Timezone-aware scheduling
+  - Exception dates and modifications
+
+- **Webhook Integration**: Seamless integration with external systems through:
+  - Configurable webhook endpoints
+  - Automatic event trigger dispatching
+  - Custom payload formatting
+  - Retry mechanisms for failed deliveries
+
+- **Security & Access Control**: Enterprise-grade security features:
+  - Two-tier authentication system (Master Token + JWT)
+  - Role-based access control (RBAC)
+  - Fine-grained permission management
+  - Token expiration and revocation
+
+- **Data Management**: Robust data handling capabilities:
+  - PostgreSQL-backed durable storage
+  - Tag-based event organization
+  - Custom metadata support
+  - Event versioning and history
+
+### Architecture
+
+Qhronos is built with a microservices-ready architecture that emphasizes:
+- **Scalability**: Horizontal scaling capabilities
+- **Reliability**: Durable storage and transaction safety
+- **Maintainability**: Clean separation of concerns
+- **Extensibility**: Modular design for future enhancements
+
+### Use Cases
+
+Qhronos is ideal for:
+- **AI Agent Scheduling**: Coordinate and schedule AI agent activities
+- **Automated Workflows**: Trigger and manage automated processes
+- **System Maintenance**: Schedule maintenance windows and updates
+- **Data Processing**: Coordinate data processing pipelines
+- **Monitoring Systems**: Schedule health checks and monitoring tasks
+
+### Integration
+
+The service is designed for easy integration with:
+- AI agent frameworks
+- Automation platforms
+- Monitoring systems
+- Custom applications
+- Enterprise workflows
+
+## Key Features
+
+- **Flexible Scheduling**: Support for iCalendar recurrence rules (RFC 5545)
+- **Webhook Integration**: Automatic webhook dispatching for event triggers
+- **Role-Based Access Control**: Fine-grained access control with JWT tokens
+- **Tag-Based Organization**: Organize events with custom tags
+- **Metadata Support**: Store custom metadata with events
+- **Durable Storage**: PostgreSQL-backed event storage
+- **Enterprise Ready**: Built with security and scalability in mind
+
+## Quick Start
 
 ### Prerequisites
 
@@ -38,12 +142,6 @@ cd qhronos
      password: postgres
      dbname: qhronos
 
-   redis:
-     host: localhost
-     port: 6379
-     password: ""
-     db: 0
-
    auth:
      master_token: "your-secure-master-token"
      jwt_secret: "your-secure-jwt-secret"
@@ -56,9 +154,9 @@ cd qhronos
    ./scripts/db.sh start
    ```
 
-2. Start Redis:
+2. Run database migrations:
    ```bash
-   ./scripts/redis.sh start
+   ./scripts/migrate.sh up
    ```
 
 ### Step 4: Install Dependencies
@@ -70,503 +168,206 @@ go mod download
 ### Step 5: Run the Server
 
 ```bash
-go run cmd/server/main.go
+go run cmd/api/main.go
 ```
 
 The server should now be running at `http://localhost:8080`.
 
-### Step 6: Create Your First Token
-
-1. Use the master token to create a JWT token:
-   ```bash
-   curl -X POST http://localhost:8080/tokens \
-     -H "Authorization: Bearer your-secure-master-token" \
-     -H "Content-Type: application/json" \
-     -d '{
-       "type": "jwt",
-       "sub": "your-user-id",
-       "access": "admin",
-       "scope": ["user:your-username"],
-       "expires_at": "2024-12-31T23:59:59Z"
-     }'
-   ```
-
-2. Save the returned JWT token for future requests.
-
-### Step 7: Create Your First Event
-
-1. Create an event using the JWT token:
-   ```bash
-   curl -X POST http://localhost:8080/events \
-     -H "Authorization: Bearer your-jwt-token" \
-     -H "Content-Type: application/json" \
-     -d '{
-       "name": "Daily Backup",
-       "description": "System backup job",
-       "schedule": "0 0 * * *",
-       "tags": ["system:backup"],
-       "metadata": {
-         "backupType": "full",
-         "retentionDays": 7
-       }
-     }'
-   ```
-
-### Step 8: Verify the Event
-
-1. List all events:
-   ```bash
-   curl -X GET http://localhost:8080/events \
-     -H "Authorization: Bearer your-jwt-token"
-   ```
-
-2. Get a specific event:
-   ```bash
-   curl -X GET http://localhost:8080/events/{event-id} \
-     -H "Authorization: Bearer your-jwt-token"
-   ```
-
-### Step 9: Clean Up
-
-When you're done, you can stop the services:
-
-```bash
-./scripts/db.sh stop
-./scripts/redis.sh stop
-```
-
-## Common Issues and Solutions
-
-### Database Connection Issues
-
-If you encounter database connection issues:
-1. Check if PostgreSQL is running: `./scripts/db.sh status`
-2. Verify the connection details in `config.yaml`
-3. Check if the port (5433) is available
-
-### Redis Connection Issues
-
-If you encounter Redis connection issues:
-1. Check if Redis is running: `./scripts/redis.sh status`
-2. Verify the connection details in `config.yaml`
-3. Check if the port (6379) is available
-
-### Authentication Issues
-
-If you encounter authentication issues:
-1. Verify your master token in `config.yaml`
-2. Check if your JWT token is valid and not expired
-3. Ensure you're using the correct Authorization header format
-
-## Next Steps
-
-- Explore the API documentation in the design document
-- Set up monitoring and logging
-- Configure rate limiting
-- Implement webhook handlers for your events
-
-## Setup
-
-1. Install Go (1.24 or later)
-2. Clone the repository
-3. Copy `config.example.yaml` to `config.yaml` and update the configuration values
-4. Install dependencies:
-   ```bash
-   go mod download
-   ```
-5. Start the required services (see Service Management section)
-6. Run the server:
-   ```bash
-   go run cmd/server/main.go
-   ```
-
-## Service Management
-
-The project uses Docker Compose to manage PostgreSQL and Redis services. Data is persisted in the `data` directory.
-
-### Database Management
-
-```bash
-# Start the database
-./scripts/db.sh start
-
-# Stop the database
-./scripts/db.sh stop
-
-# Restart the database
-./scripts/db.sh restart
-
-# Remove the database container (data will be preserved)
-./scripts/db.sh remove
-
-# Check database status
-./scripts/db.sh status
-```
-
-### Redis Management
-
-```bash
-# Start Redis
-./scripts/redis.sh start
-
-# Stop Redis
-./scripts/redis.sh stop
-
-# Restart Redis
-./scripts/redis.sh restart
-
-# Remove Redis container (data will be preserved)
-./scripts/redis.sh remove
-
-# Check Redis status
-./scripts/redis.sh status
-
-# Connect to Redis CLI
-./scripts/redis.sh cli
-```
-
-### Service Configuration
-
-#### Database
-- Host: localhost
-- Port: 5433
-- User: postgres
-- Password: postgres
-- Database: qhronos
-
-#### Redis
-- Host: localhost
-- Port: 6379
-- Password: (none by default)
-- DB: 0
-
-These values match the default configuration in `config.yaml`.
-
-## Configuration
-
-The application uses a YAML configuration file (`config.yaml`) with the following structure:
-
-```yaml
-server:
-  port: 8080
-
-database:
-  host: localhost
-  port: 5433
-  user: postgres
-  password: postgres
-  dbname: qhronos
-
-redis:
-  host: localhost
-  port: 6379
-  password: ""
-  db: 0
-
-auth:
-  master_token: "your-master-token-here"
-  jwt_secret: "your-jwt-secret-here"
-```
-
-### Authentication Configuration
-
-- `master_token`: The master token used to create JWT tokens
-- `jwt_secret`: The secret key used to sign JWT tokens
-
-## Project Structure
-
-```
-qhronos/
-├── cmd/
-│   ├── api/            # API server entry point
-│   └── server/         # Main application entry point
-├── internal/
-│   ├── api/            # API handlers and routes
-│   ├── config/         # Configuration management
-│   ├── models/         # Data models
-│   ├── repository/     # Database operations
-│   ├── scheduler/      # Scheduling logic
-│   ├── services/       # Business logic
-│   └── utils/          # Utility functions
-├── pkg/
-│   ├── auth/           # Authentication package
-│   ├── database/       # Database package
-│   └── redis/          # Redis package
-├── data/
-│   ├── postgres/       # PostgreSQL data directory
-│   └── redis/         # Redis data directory
-├── scripts/
-│   ├── db.sh          # Database management script
-│   ├── redis.sh       # Redis management script
-│   └── test.sh        # Test runner script
-├── migrations/        # Database migrations
-└── tests/            # Test files
-```
-
-## Development
-
-1. Make sure you have Docker installed and running
-2. Start the required services using the management scripts
-3. Update the configuration in `config.yaml`
-4. Run the server:
-   ```bash
-   go run cmd/server/main.go
-   ```
-
-## Testing
-
-The project uses a comprehensive test suite that includes:
-- Unit tests for all components
-- Integration tests for API endpoints
-- Database tests with a dedicated test database
-
-To run tests:
-```bash
-./scripts/test.sh
-```
-
-The test script will:
-1. Start a test PostgreSQL container
-2. Create and migrate the test database
-3. Run all tests
-4. Clean up the test environment
-
 ## Authentication
 
-The API uses a two-tier authentication system:
+Qhronos uses a two-tier authentication system:
 
-1. **Master Token**
-   - Used to create JWT tokens
-   - Must be provided in the Authorization header
-   - Format: `Bearer <master_token>`
+1. **Master Token**: A static token used to create JWT tokens
+2. **JWT Tokens**: Short-lived tokens with specific access levels and scopes
 
-2. **JWT Tokens**
-   - Created using the master token
-   - Include access level and scope information
-   - Must be provided in the Authorization header
-   - Format: `Bearer <jwt_token>`
+### Creating a JWT Token
+
+```bash
+curl -X POST http://localhost:8080/tokens \
+  -H "Authorization: Bearer your-secure-master-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "jwt",
+    "sub": "your-user-id",
+    "access": "admin",
+    "scope": ["user:your-username"],
+    "expires_at": "2024-12-31T23:59:59Z"
+  }'
+```
 
 ### Access Levels
-- `read`: Can only read resources
-- `write`: Can read and write resources
-- `admin`: Full access to all resources
 
-### Scopes
-- Define which resources a token can access
-- Format: `resource:identifier`
-- Example: `user:rizqme`, `system:tester`
+- `read`: Can view events and occurrences
+- `write`: Can create and update events
+- `admin`: Full access to all operations
 
 ## API Endpoints
-
-### Authentication
-
-#### Create JWT Token
-```http
-POST /tokens
-Authorization: Bearer <master_token>
-
-{
-    "type": "jwt",
-    "sub": "target_user_id",
-    "access": "read",
-    "scope": ["user:rizqme", "system:tester"],
-    "expires_at": "2024-05-01T00:00:00Z"
-}
-```
-
-Response:
-```json
-{
-    "token": "<new_jwt_token>",
-    "type": "jwt",
-    "sub": "target_user_id",
-    "access": "read",
-    "scope": ["user:rizqme", "system:tester"],
-    "expires_at": "2024-05-01T00:00:00Z"
-}
-```
 
 ### Events
 
 #### Create Event
-```http
-POST /events
-Authorization: Bearer <jwt_token>
-
-{
-    "name": "Test Event",
-    "description": "Test Description",
-    "schedule": "0 0 * * *",
-    "tags": ["test"],
+```bash
+curl -X POST http://localhost:8080/events \
+  -H "Authorization: Bearer your-jwt-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Daily Backup",
+    "description": "System backup job",
+    "start_time": "2024-03-20T00:00:00Z",
+    "webhook_url": "https://example.com/webhook",
+    "schedule": "FREQ=WEEKLY;BYDAY=MO,WE,FR;INTERVAL=1",
+    "tags": ["system:backup"],
     "metadata": {
-        "key": "value"
+      "backupType": "full",
+      "retentionDays": 7
     }
-}
-```
-
-Response:
-```json
-{
-    "id": "72f358ee-a0b2-4ad4-a5bb-9061823d3480",
-    "name": "Test Event",
-    "description": "Test Description",
-    "schedule": "0 0 * * *",
-    "tags": ["test"],
-    "metadata": {
-        "key": "value"
-    },
-    "status": "active",
-    "created_at": "2024-04-22T12:19:11Z",
-    "updated_at": "2024-04-22T12:19:11Z"
-}
+  }'
 ```
 
 #### Get Event
-```http
-GET /events/:id
-Authorization: Bearer <jwt_token>
-```
-
-Response:
-```json
-{
-    "id": "72f358ee-a0b2-4ad4-a5bb-9061823d3480",
-    "name": "Test Event",
-    "description": "Test Description",
-    "schedule": "0 0 * * *",
-    "tags": ["test"],
-    "metadata": {
-        "key": "value"
-    },
-    "status": "active",
-    "created_at": "2024-04-22T12:19:11Z",
-    "updated_at": "2024-04-22T12:19:11Z"
-}
+```bash
+curl -X GET http://localhost:8080/events/{event-id} \
+  -H "Authorization: Bearer your-jwt-token"
 ```
 
 #### Update Event
-```http
-PUT /events/:id
-Authorization: Bearer <jwt_token>
-
-{
-    "name": "Updated Event",
-    "description": "Updated Description",
-    "schedule": "0 0 * * *",
-    "tags": ["test", "updated"],
-    "metadata": {
-        "key": "new_value"
-    }
-}
-```
-
-Response:
-```json
-{
-    "id": "72f358ee-a0b2-4ad4-a5bb-9061823d3480",
-    "name": "Updated Event",
-    "description": "Updated Description",
-    "schedule": "0 0 * * *",
-    "tags": ["test", "updated"],
-    "metadata": {
-        "key": "new_value"
-    },
-    "status": "active",
-    "created_at": "2024-04-22T12:19:11Z",
-    "updated_at": "2024-04-22T12:19:11Z"
-}
+```bash
+curl -X PUT http://localhost:8080/events/{event-id} \
+  -H "Authorization: Bearer your-jwt-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Updated Event Name",
+    "description": "Updated description",
+    "schedule": "FREQ=WEEKLY;BYDAY=TU,TH;INTERVAL=1",
+    "tags": ["system:backup", "priority:high"]
+  }'
 ```
 
 #### Delete Event
-```http
-DELETE /events/:id
-Authorization: Bearer <jwt_token>
+```bash
+curl -X DELETE http://localhost:8080/events/{event-id} \
+  -H "Authorization: Bearer your-jwt-token"
 ```
 
-Response: 200 OK
-
-#### List Events
-```http
-GET /events?tags=test,updated
-Authorization: Bearer <jwt_token>
-```
-
-Response:
-```json
-[
-    {
-        "id": "72f358ee-a0b2-4ad4-a5bb-9061823d3480",
-        "name": "Updated Event",
-        "description": "Updated Description",
-        "schedule": "0 0 * * *",
-        "tags": ["test", "updated"],
-        "metadata": {
-            "key": "new_value"
-        },
-        "status": "active",
-        "created_at": "2024-04-22T12:19:11Z",
-        "updated_at": "2024-04-22T12:19:11Z"
-    }
-]
+#### List Events by Tags
+```bash
+curl -X GET "http://localhost:8080/events?tags=system:backup" \
+  -H "Authorization: Bearer your-jwt-token"
 ```
 
 ### Occurrences
 
 #### Get Occurrence
-```http
-GET /occurrences/:id
-Authorization: Bearer <jwt_token>
+```bash
+curl -X GET http://localhost:8080/occurrences/{occurrence-id} \
+  -H "Authorization: Bearer your-jwt-token"
+```
+
+#### List Occurrences by Event
+```bash
+curl -X GET "http://localhost:8080/events/{event-id}/occurrences" \
+  -H "Authorization: Bearer your-jwt-token"
+```
+
+## Project Structure
+
+```
+qhronos/
+├── cmd/                    # Main application entry points
+│   └── api/               # API server entry point
+├── internal/              # Private application code
+│   ├── api/              # API definitions and interfaces
+│   ├── config/           # Configuration management
+│   ├── database/         # Database connection and setup
+│   ├── handlers/         # HTTP request handlers
+│   ├── middleware/       # HTTP middleware (auth, rate limit, etc.)
+│   ├── models/           # Data models and structures
+│   ├── repository/       # Data access layer
+│   ├── services/         # Business logic services
+│   │   └── scheduler/    # Scheduler and dispatcher services
+│   ├── testutils/        # Testing utilities
+│   └── utils/            # Shared utilities
+├── migrations/           # Database migration scripts
+├── pkg/                  # Public packages
+├── scripts/             # Utility scripts
+├── tests/               # Integration and end-to-end tests
+├── data/                # Data files and fixtures
+├── config.example.yaml  # Example configuration
+├── design.md           # This design document
+├── docker-compose.yml  # Docker development environment
+├── go.mod              # Go module definition
+├── go.sum              # Go module checksums
+└── README.md           # Project documentation
+```
+
+## Error Handling
+
+### Repository Layer
+
+The repository layer follows a consistent pattern for handling not found cases:
+
+1. **Get Operations**:
+   - When a resource is not found, return `(nil, nil)`
+   - This applies to methods like `GetByID`, `GetByName`, etc.
+
+2. **Delete Operations**:
+   - When deleting a non-existent resource, return `nil`
+   - This applies to methods like `Delete`, `DeleteByID`, etc.
+
+3. **Update Operations**:
+   - When updating a non-existent resource, return `(nil, nil)`
+   - This applies to methods like `Update`, `UpdateByID`, etc.
+
+This pattern ensures consistent behavior across all repositories and simplifies error handling in the service layer.
+
+## Status Endpoint
+
+Qhronos provides a status endpoint for health checks and configuration overview:
+
+```bash
+curl -X GET http://localhost:8080/status
 ```
 
 Response:
 ```json
 {
-    "id": "25c5d4ba-9c2b-4824-9a7f-bb46d148d11b",
-    "event_id": "72f358ee-a0b2-4ad4-a5bb-9061823d3480",
-    "scheduled_at": "2024-04-22T00:00:00Z",
-    "status": "pending",
-    "created_at": "2024-04-22T12:19:11Z",
-    "updated_at": "2024-04-22T12:19:11Z"
-}
-```
-
-#### List Occurrences
-```http
-GET /occurrences?tags=test
-Authorization: Bearer <jwt_token>
-```
-
-Response:
-```json
-[
-    {
-        "id": "25c5d4ba-9c2b-4824-9a7f-bb46d148d11b",
-        "event_id": "72f358ee-a0b2-4ad4-a5bb-9061823d3480",
-        "scheduled_at": "2024-04-22T00:00:00Z",
-        "status": "pending",
-        "created_at": "2024-04-22T12:19:11Z",
-        "updated_at": "2024-04-22T12:19:11Z"
+  "status": "ok",
+  "uptime_seconds": 86400,
+  "version": "1.0.0",
+  "jwt": {
+    "issuer": "qhronos",
+    "algorithm": "HS256",
+    "default_exp_seconds": 3600,
+    "token_info": {
+      "sub": "rizqme",
+      "access": "read_write",
+      "scope": ["user:rizqme", "system:qa"],
+      "exp": 1714569600
     }
-]
-```
-
-## Error Responses
-
-The API uses standard HTTP status codes and returns error messages in the following format:
-
-```json
-{
-    "error": "Error message description"
+  },
+  "hmac": {
+    "algorithm": "HMAC-SHA256",
+    "signature_header": "X-Qhronos-Signature",
+    "default_secret": "qhronos.io",
+    "event_override_supported": true
+  }
 }
 ```
 
-Common error codes:
-- 400: Bad Request - Invalid input data
-- 401: Unauthorized - Invalid or missing authentication
-- 403: Forbidden - Insufficient permissions
-- 404: Not Found - Resource not found
-- 500: Internal Server Error - Server-side error
+## Rate Limiting
+
+Qhronos implements rate limiting using a token-bucket algorithm backed by Redis:
+
+- **Bucket Size**: 100 requests
+- **Refill Rate**: 10 requests per second
+- **Window**: 1 second
+- **Key Format**: `rate_limit:{token_id}`
+
+Rate limit headers are included in responses:
+- `X-RateLimit-Limit`: Maximum requests per window
+- `X-RateLimit-Remaining`: Remaining requests in current window
+- `X-RateLimit-Reset`: Time until rate limit resets
 
 ## License
 
-MIT
+MIT License - See LICENSE file for details

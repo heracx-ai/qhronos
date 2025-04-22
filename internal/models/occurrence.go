@@ -24,6 +24,7 @@ type Occurrence struct {
 	LastAttempt  *time.Time       `json:"last_attempt,omitempty" db:"last_attempt"`
 	AttemptCount int              `json:"attempt_count" db:"attempt_count"`
 	CreatedAt    time.Time        `json:"created_at" db:"created_at"`
+	UpdatedAt    *time.Time       `json:"updated_at,omitempty" db:"updated_at"`
 }
 
 type OccurrenceFilter struct {

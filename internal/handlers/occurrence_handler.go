@@ -11,11 +11,15 @@ import (
 )
 
 type OccurrenceHandler struct {
+	eventRepo      *repository.EventRepository
 	occurrenceRepo *repository.OccurrenceRepository
 }
 
-func NewOccurrenceHandler(occurrenceRepo *repository.OccurrenceRepository) *OccurrenceHandler {
-	return &OccurrenceHandler{occurrenceRepo: occurrenceRepo}
+func NewOccurrenceHandler(eventRepo *repository.EventRepository, occurrenceRepo *repository.OccurrenceRepository) *OccurrenceHandler {
+	return &OccurrenceHandler{
+		eventRepo:      eventRepo,
+		occurrenceRepo: occurrenceRepo,
+	}
 }
 
 func (h *OccurrenceHandler) GetOccurrence(c *gin.Context) {
@@ -82,4 +86,31 @@ func (h *OccurrenceHandler) ListOccurrencesByTags(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, response)
+}
+
+func (h *OccurrenceHandler) ListOccurrencesByEvent(c *gin.Context) {
+	eventID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid event ID"})
+		return
+	}
+
+	// Check if event exists
+	event, err := h.eventRepo.GetByID(c.Request.Context(), eventID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get event"})
+		return
+	}
+	if event == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Event not found"})
+		return
+	}
+
+	occurrences, err := h.occurrenceRepo.ListByEventID(c.Request.Context(), eventID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list occurrences"})
+		return
+	}
+
+	c.JSON(http.StatusOK, occurrences)
 } 

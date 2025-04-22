@@ -2,7 +2,7 @@
 
 ## Overview
 
-**Qhronos** is a developer-first scheduling and notification service. It allows clients to schedule one-time or recurring events via API, store them durably, and manage them through a simple REST interface. The system is designed for reliability and simplicity, using PostgreSQL for persistence.
+**Qhronos** is a developer-first scheduling and notification service. It allows clients to schedule one-time or recurring events via API, store them durably, and manage them through a simple REST interface. The system is designed for reliability and simplicity, using PostgreSQL for persistence and Redis for scheduling.
 
 ---
 
@@ -18,10 +18,11 @@
 ## Key Features
 
 - Create, update, delete scheduled events via REST API.
-- Support for cron-like schedule expressions.
+- Support for iCalendar (RFC 5545) recurrence rules.
 - Role-based access control with JWT tokens.
 - Separation of concerns between data storage and business logic.
 - Audit trail via PostgreSQL.
+- Reliable webhook delivery with retries.
 
 ---
 
@@ -35,9 +36,22 @@
        │                         │
        │                         └── stores: events, occurrences
        │
-       └─────► [Token Service]
+       ├─────► [Token Service]
+       │              │
+       │              └── manages: JWT tokens, access control
+       │
+       ├─────► [Redis]
+       │         │
+       │         ├── schedule:events (ZSET)
+       │         └── recurring:events (HASH)
+       │
+       ├─────► [Recurring Event Expander]
+       │              │
+       │              └── expands recurring events into occurrences
+       │
+       └─────► [Dispatcher]
                       │
-                      └── manages: JWT tokens, access control
+                      └── delivers webhooks with retries
 ```
 
 ---
@@ -53,12 +67,14 @@ CREATE TABLE events (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name TEXT NOT NULL,
   description TEXT,
-  schedule TEXT NOT NULL,
-  tags TEXT[] DEFAULT '{}',
+  start_time TIMESTAMPTZ NOT NULL,
+  webhook_url TEXT NOT NULL,
   metadata JSONB DEFAULT '{}',
-  status TEXT CHECK (status IN ('active', 'deleted')) DEFAULT 'active',
+  schedule TEXT,
+  tags TEXT[] DEFAULT '{}',
+  status TEXT CHECK (status IN ('active', 'paused', 'deleted')) DEFAULT 'active',
   created_at TIMESTAMPTZ DEFAULT now(),
-  updated_at TIMESTAMPTZ DEFAULT now()
+  updated_at TIMESTAMPTZ
 );
 ```
 
@@ -67,14 +83,13 @@ CREATE TABLE events (
 ```sql
 CREATE TABLE occurrences (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  event_id UUID REFERENCES events(id) ON DELETE CASCADE,
+  event_id UUID NOT NULL REFERENCES events(id) ON DELETE CASCADE,
   scheduled_at TIMESTAMPTZ NOT NULL,
-  status TEXT CHECK (status IN ('pending', 'completed', 'failed')) DEFAULT 'pending',
-  created_at TIMESTAMPTZ DEFAULT now(),
-  updated_at TIMESTAMPTZ DEFAULT now()
+  status TEXT CHECK (status IN ('pending', 'scheduled', 'dispatched', 'completed', 'failed')) DEFAULT 'pending',
+  last_attempt TIMESTAMPTZ,
+  attempt_count INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT now()
 );
-
-CREATE INDEX ON occurrences(scheduled_at) WHERE status = 'pending';
 ```
 
 ---
@@ -112,44 +127,6 @@ Qhronos supports two authentication methods:
   - `write`: can create/update/delete within scope
   - `admin`: full access to all data, bypassing scope restrictions
 
----
-
-## Token Management
-
-Qhronos uses a single, static **Master Token** configured via the environment variable `QHRONOS_MASTER_TOKEN` at service startup. This token:
-
-- Cannot be changed or revoked at runtime.
-- Grants full access to all API endpoints, bypassing scope and access restrictions.
-
-### JWT Token Issuance
-
-- **Endpoint**
-  ```http
-  POST /tokens
-  Authorization: Bearer <master_token>
-  ```
-- **Request Body**
-  ```json
-  {
-    "type": "jwt",
-    "sub": "target_user_id",
-    "access": "read" | "write" | "admin",
-    "scope": ["user:rizqme", "system:tester"],
-    "expires_at": "2024-05-01T00:00:00Z"
-  }
-  ```
-- **Response**
-  ```json
-  {
-    "token": "<new_jwt_token>",
-    "type": "jwt",
-    "sub": "target_user_id",
-    "access": "read",
-    "scope": ["user:rizqme", "system:tester"],
-    "expires_at": "2024-05-01T00:00:00Z"
-  }
-  ```
-
 ### Authentication Middleware
 
 The API includes an authentication middleware that validates JWT tokens and enforces access control:
@@ -173,129 +150,186 @@ The API includes an authentication middleware that validates JWT tokens and enfo
 
 ---
 
+## Rate Limiting
+
+Qhronos implements a token-bucket rate limiting algorithm backed by Redis to protect the API from abuse and ensure fair usage. The rate limiter is implemented as middleware and can be configured per route or globally.
+
+### Implementation Details
+
+1. **Token Bucket Algorithm**:
+   - Uses Redis for distributed rate limiting
+   - Implements atomic operations using Redis MULTI/EXEC
+   - Supports token refill based on elapsed time
+   - Configurable bucket size and refill rate
+
+2. **Default Configuration**:
+   - Bucket Size: 100 requests
+   - Refill Rate: 10 requests per second
+   - Window: 1 second
+   - Key Format: `rate_limit:{token_id}`
+
+3. **Client Identification**:
+   - Primary: Token ID from JWT
+   - Fallback: Client IP address
+   - Supports per-token rate limiting
+
+4. **Response Headers**:
+   - `X-RateLimit-Limit`: Maximum requests per window
+   - `X-RateLimit-Remaining`: Remaining requests
+   - `X-RateLimit-Reset`: Time until reset
+   - `Retry-After`: Wait time when rate limited
+
+5. **Error Handling**:
+   - `429 Too Many Requests`: Rate limit exceeded
+   - `500 Internal Server Error`: Redis errors
+   - Includes error details in response body
+
+6. **Testing**:
+   - Comprehensive test suite covering:
+     - Basic rate limiting
+     - Token refill
+     - Per-token rate limiting
+     - Configuration options
+   - Uses test Redis database (DB 1)
+   - Verifies headers and response codes
+
+### Usage Example
+
+```go
+// Initialize rate limiter
+rateLimiter := middleware.NewRateLimiter(redisClient,
+    middleware.WithBucketSize(100),
+    middleware.WithRefillRate(10),
+    middleware.WithWindow(1),
+)
+
+// Apply to routes
+router.Use(rateLimiter.RateLimit())
+```
+
+---
+
 ## API Design
 
-### Create Event
+### Events
+
+#### Create Event
 
 **POST** `/events`
 
-**Request**
-
+Request:
 ```json
 {
   "name": "Team Sync",
   "description": "Weekly team sync meeting",
-  "schedule": "0 0 * * *",
-  "tags": ["user:rizqme", "team:ai"],
+  "start_time": "2025-05-01T09:00:00Z",
+  "webhook_url": "https://app.com/hook",
   "metadata": {
     "meetingId": "abc123"
-  }
+  },
+  "schedule": "FREQ=WEEKLY;BYDAY=MO,WE,FR;INTERVAL=1",
+  "tags": ["user:rizqme", "team:ai"]
 }
 ```
 
-**Response**
-
+Response:
 ```json
 {
   "id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
   "name": "Team Sync",
   "description": "Weekly team sync meeting",
-  "schedule": "0 0 * * *",
-  "tags": ["user:rizqme", "team:ai"],
+  "start_time": "2025-05-01T09:00:00Z",
+  "webhook_url": "https://app.com/hook",
   "metadata": {
     "meetingId": "abc123"
   },
+  "schedule": "FREQ=WEEKLY;BYDAY=MO,WE,FR;INTERVAL=1",
+  "tags": ["user:rizqme", "team:ai"],
   "status": "active",
-  "created_at": "2025-04-21T16:30:00Z",
-  "updated_at": "2025-04-21T16:30:00Z"
+  "created_at": "2025-04-21T16:30:00Z"
 }
 ```
 
-### Update Event
-
-**PUT** `/events/{id}`
-
-**Request**
-
-```json
-{
-  "name": "Updated Meeting",
-  "description": "Updated description",
-  "schedule": "0 0 * * *",
-  "tags": ["user:rizqme", "team:ai", "updated"],
-  "metadata": {
-    "meetingId": "abc123",
-    "newField": "value"
-  }
-}
-```
-
-**Response**
-
-```json
-{
-  "id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
-  "name": "Updated Meeting",
-  "description": "Updated description",
-  "schedule": "0 0 * * *",
-  "tags": ["user:rizqme", "team:ai", "updated"],
-  "metadata": {
-    "meetingId": "abc123",
-    "newField": "value"
-  },
-  "status": "active",
-  "created_at": "2025-04-21T16:30:00Z",
-  "updated_at": "2025-04-21T17:30:00Z"
-}
-```
-
-### Get Event
+#### Get Event
 
 **GET** `/events/{id}`
 
-**Response**
-
+Response:
 ```json
 {
   "id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
-  "name": "Updated Meeting",
-  "description": "Updated description",
-  "schedule": "0 0 * * *",
-  "tags": ["user:rizqme", "team:ai", "updated"],
+  "name": "Team Sync",
+  "description": "Weekly team sync meeting",
+  "start_time": "2025-05-01T09:00:00Z",
+  "webhook_url": "https://app.com/hook",
   "metadata": {
-    "meetingId": "abc123",
-    "newField": "value"
+    "meetingId": "abc123"
   },
+  "schedule": "FREQ=WEEKLY;BYDAY=MO,WE,FR;INTERVAL=1",
+  "tags": ["user:rizqme", "team:ai"],
   "status": "active",
   "created_at": "2025-04-21T16:30:00Z",
   "updated_at": "2025-04-21T17:30:00Z"
 }
 ```
 
-### Delete Event
+#### Update Event
+
+**PUT** `/events/{id}`
+
+Request:
+```json
+{
+  "name": "Updated Team Sync",
+  "description": "Updated weekly team sync meeting",
+  "schedule": "FREQ=WEEKLY;BYDAY=TU,TH;INTERVAL=1",
+  "tags": ["user:rizqme", "team:ai", "updated"]
+}
+```
+
+Response:
+```json
+{
+  "id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+  "name": "Updated Team Sync",
+  "description": "Updated weekly team sync meeting",
+  "start_time": "2025-05-01T09:00:00Z",
+  "webhook_url": "https://app.com/hook",
+  "metadata": {
+    "meetingId": "abc123"
+  },
+  "schedule": "FREQ=WEEKLY;BYDAY=TU,TH;INTERVAL=1",
+  "tags": ["user:rizqme", "team:ai", "updated"],
+  "status": "active",
+  "created_at": "2025-04-21T16:30:00Z",
+  "updated_at": "2025-04-21T17:30:00Z"
+}
+```
+
+#### Delete Event
 
 **DELETE** `/events/{id}`
 
-**Response**: 200 OK
+Response: 200 OK
 
-### List Events
+#### List Events
 
 **GET** `/events?tags=user:rizqme,team:ai`
 
-**Response**
-
+Response:
 ```json
 [
   {
     "id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
-    "name": "Updated Meeting",
-    "description": "Updated description",
-    "schedule": "0 0 * * *",
-    "tags": ["user:rizqme", "team:ai", "updated"],
+    "name": "Updated Team Sync",
+    "description": "Updated weekly team sync meeting",
+    "start_time": "2025-05-01T09:00:00Z",
+    "webhook_url": "https://app.com/hook",
     "metadata": {
-      "meetingId": "abc123",
-      "newField": "value"
+      "meetingId": "abc123"
     },
+    "schedule": "FREQ=WEEKLY;BYDAY=TU,TH;INTERVAL=1",
+    "tags": ["user:rizqme", "team:ai", "updated"],
     "status": "active",
     "created_at": "2025-04-21T16:30:00Z",
     "updated_at": "2025-04-21T17:30:00Z"
@@ -303,29 +337,30 @@ The API includes an authentication middleware that validates JWT tokens and enfo
 ]
 ```
 
-### Get Occurrence
+### Occurrences
+
+#### Get Occurrence
 
 **GET** `/occurrences/{id}`
 
-**Response**
-
+Response:
 ```json
 {
   "id": "25c5d4ba-9c2b-4824-9a7f-bb46d148d11b",
   "event_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
   "scheduled_at": "2025-04-22T00:00:00Z",
   "status": "pending",
-  "created_at": "2025-04-21T16:30:00Z",
-  "updated_at": "2025-04-21T16:30:00Z"
+  "last_attempt": null,
+  "attempt_count": 0,
+  "created_at": "2025-04-21T16:30:00Z"
 }
 ```
 
-### List Occurrences
+#### List Occurrences
 
 **GET** `/occurrences?tags=user:rizqme`
 
-**Response**
-
+Response:
 ```json
 [
   {
@@ -333,8 +368,9 @@ The API includes an authentication middleware that validates JWT tokens and enfo
     "event_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
     "scheduled_at": "2025-04-22T00:00:00Z",
     "status": "pending",
-    "created_at": "2025-04-21T16:30:00Z",
-    "updated_at": "2025-04-21T16:30:00Z"
+    "last_attempt": null,
+    "attempt_count": 0,
+    "created_at": "2025-04-21T16:30:00Z"
   }
 ]
 ```
@@ -364,59 +400,39 @@ Common error codes:
 
 1. API receives event.
 2. Stores metadata in `events` table.
-3. Computes first occurrence (or multiple) using `rrule`.
-4. Inserts into `occurrences`.
-5. Adds to Redis: `ZADD schedule:events <timestamp> <occurrence_id>`.
+3. If event has a schedule:
+   - Adds to Redis: `HSET recurring:events <event_id> <event_data>`
+4. Recurring Event Expander:
+   - Runs every 5 minutes
+   - Scans recurring events
+   - Computes next 24 hours of occurrences
+   - Adds to Redis: `ZADD schedule:events <timestamp> <occurrence_data>`
 
-### Recurring Expander (Cron)
+### Dispatcher Worker
 
-1. Runs every 5–15 minutes.
-2. Scans recurring events.
-3. Checks for the last expanded time.
-4. Computes next batch of occurrences.
-5. Inserts into `occurrences`, `ZADD` into Redis.
-
-### Scheduler Worker (Go)
-
-```go
-for {
-  now := time.Now().Unix()
-  // Use ZRANGEBYSCORE with LIMIT or ZPOPMIN
-  due, err := redis.ZRangeByScoreWithScores(ctx, "schedule:events", &redis.ZRangeBy{
-    Min: "-inf",
-    Max: fmt.Sprintf("%d", now),
-    Count: 100,
-  }).Result()
-
-  if err != nil || len(due) == 0 {
-    time.Sleep(500 * time.Millisecond)
-    continue
-  }
-
-  for _, item := range due {
-    dispatchChan <- item.Member.(string)
-    redis.ZRem(ctx, "schedule:events", item.Member)
-  }
-}
-```
-
-### Dispatcher Worker (Go)
-
-1. Loads event + occurrence from PostgreSQL.
-2. Attempts `POST` to `webhook_url`.
-3. On success: marks occurrence `dispatched`.
-4. On failure:
-   - If retries < max: requeue with delay
-   - Else: mark as `failed`
+1. Runs every second
+2. Gets due events from Redis: `ZRANGEBYSCORE schedule:events 0 <now>`
+3. For each occurrence:
+   - Loads event from PostgreSQL
+   - Attempts `POST` to `webhook_url`
+   - On success: marks occurrence `dispatched`
+   - On failure:
+     - If retries < max: requeue with delay
+     - Else: mark as `failed`
 
 ---
 
-## Capacity Planning (Redis)
+## Capacity Planning
 
-Assuming:
+### PostgreSQL
+- Events table: ~1KB per event
+- Occurrences table: ~500B per occurrence
+- Estimated capacity: Millions of events and occurrences
 
-- 400 bytes per event in Redis
-- 1GB Redis RAM → approx. **2.3 million occurrences** (best-effort estimate)
+### Redis
+- Schedule events: ~400B per occurrence
+- Recurring events: ~1KB per event
+- 1GB Redis RAM → approx. 2.3 million occurrences
 
 ---
 
@@ -424,45 +440,15 @@ Assuming:
 
 | Component         | Stack / Tool            |
 | ----------------- | ----------------------- |
-| API Backend       | Go (Gin / Echo / Fiber) |
-| Postgres DB       | PostgreSQL 14+          |
-| Scheduler Queue   | Redis 6+ (ZSET)         |
-| Recurrence Parser | `rrule-go`              |
-| Containerization  | Docker / Kubernetes     |
-| Monitoring        | Prometheus + Grafana    |
-| Logging           | Loki or ELK Stack       |
+| API Backend       | Go (Gin)               |
+| Postgres DB       | PostgreSQL 14+         |
+| Scheduler Queue   | Redis 6+               |
+| Recurrence Parser | `rrule-go`             |
+| Containerization  | Docker / Kubernetes    |
+| Monitoring        | Prometheus + Grafana   |
+| Logging           | Loki or ELK Stack      |
 
 ---
-
-## Rate Limiting
-
-To protect Qhronos from abuse and ensure fair usage, the API enforces per-token rate limits using a **token-bucket** algorithm backed by Redis.
-
-- **Key**: `rate_limit:{token_id}`
-- **Algorithm**: Token Bucket
-  - **Refill rate (********`R`********\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*)**: tokens added per second (configurable)
-  - **Bucket capacity (********`B`********\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*)**: maximum burst size (configurable)
-- **Default Quotas**:
-  - **Master Token**: `R=1000 requests/minute`, `B=200`
-  - **Admin-level JWT**: `R=500 requests/minute`, `B=100`
-  - **Read/Write JWT**: `R=200 requests/minute`, `B=50`
-- **Enforcement Flow**:
-  1. On each incoming request, run an atomic Redis Lua script that:
-     - Calculates tokens to add since last check (`elapsed_seconds * R`).
-     - Increases current bucket count (capped at `B`).
-     - If bucket ≥ 1, decrement by 1 and allow the request.
-     - If bucket < 1, deny with `429 Too Many Requests` and `Retry-After` header set to the time until next token is available.
-- **Configuration**:
-  - Environment variables:
-    - `RATE_LIMIT_MASTER_R`, `RATE_LIMIT_MASTER_B`
-    - `RATE_LIMIT_ADMIN_R`, `RATE_LIMIT_ADMIN_B`
-    - `RATE_LIMIT_RW_R`, `RATE_LIMIT_RW_B`
-  - Defaults can be tuned per deployment.
-- **Monitoring**:
-  - Expose Prometheus metrics:
-    - `qhronos_rate_limit_allowed_total{token_type="$type"}`
-    - `qhronos_rate_limit_denied_total{token_type="$type"}`
-    - `qhronos_rate_limit_current_bucket{token_type="$type"}`
 
 ## Status Endpoint
 
@@ -506,6 +492,83 @@ Expose a health and configuration overview via a **public** or **authenticated**
 - Admin dashboard for managing events
 - Dead-letter queue management UI
 - Rate-limited webhook batch dispatcher
+
+---
+
+## Project Structure
+
+```
+qhronos/
+├── cmd/                    # Main application entry points
+├── internal/              # Private application code
+│   ├── api/              # API definitions and interfaces
+│   ├── config/           # Configuration management
+│   ├── database/         # Database connection and setup
+│   ├── handlers/         # HTTP request handlers
+│   ├── models/           # Data models and structures
+│   ├── repository/       # Data access layer
+│   ├── services/         # Business logic
+│   ├── testutils/        # Testing utilities
+│   └── utils/            # Shared utilities
+├── migrations/           # Database migration scripts
+├── pkg/                  # Public packages
+├── scripts/             # Utility scripts
+├── tests/               # Integration and end-to-end tests
+├── config.example.yaml  # Example configuration
+├── design.md           # This design document
+├── docker-compose.yml  # Docker development environment
+├── go.mod              # Go module definition
+├── go.sum              # Go module checksums
+└── README.md           # Project documentation
+```
+
+## Error Handling Patterns
+
+### Repository Layer
+
+The repository layer follows a consistent pattern for handling not found cases:
+
+1. **Get Operations**:
+   - When a resource is not found, return `(nil, nil)`
+   - This applies to methods like `GetByID`, `GetByName`, etc.
+   - Example:
+     ```go
+     event, err := repo.GetByID(ctx, id)
+     if err != nil {
+         return nil, err
+     }
+     if event == nil {
+         return nil, nil  // Resource not found
+     }
+     ```
+
+2. **Delete Operations**:
+   - When deleting a non-existent resource, return `nil`
+   - This applies to methods like `Delete`, `DeleteByID`, etc.
+   - Example:
+     ```go
+     err := repo.Delete(ctx, id)
+     if err != nil {
+         return err
+     }
+     return nil  // Success, even if resource didn't exist
+     ```
+
+3. **Update Operations**:
+   - When updating a non-existent resource, return `nil, nil`
+   - This applies to methods like `Update`, `UpdateByID`, etc.
+   - Example:
+     ```go
+     updated, err := repo.Update(ctx, id, update)
+     if err != nil {
+         return nil, err
+     }
+     if updated == nil {
+         return nil, nil  // Resource not found
+     }
+     ```
+
+This pattern ensures consistent behavior across all repositories and simplifies error handling in the service layer.
 
 ---
 

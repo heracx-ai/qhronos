@@ -113,4 +113,32 @@ func (r *OccurrenceRepository) Create(ctx context.Context, occurrence *models.Oc
 		occurrence.CreatedAt,
 	)
 	return err
+}
+
+func (r *OccurrenceRepository) ListByEventID(ctx context.Context, eventID uuid.UUID) ([]models.Occurrence, error) {
+	query := `SELECT * FROM occurrences WHERE event_id = $1 ORDER BY scheduled_at DESC`
+	var occurrences []models.Occurrence
+	err := r.db.SelectContext(ctx, &occurrences, query, eventID)
+	return occurrences, err
+}
+
+func (r *OccurrenceRepository) Update(ctx context.Context, occurrence *models.Occurrence) error {
+	query := `
+		UPDATE occurrences SET
+			scheduled_at = $1,
+			status = $2,
+			last_attempt = $3,
+			attempt_count = $4,
+			updated_at = $5
+		WHERE id = $6`
+
+	_, err := r.db.ExecContext(ctx, query,
+		occurrence.ScheduledAt,
+		occurrence.Status,
+		occurrence.LastAttempt,
+		occurrence.AttemptCount,
+		time.Now(),
+		occurrence.ID,
+	)
+	return err
 } 

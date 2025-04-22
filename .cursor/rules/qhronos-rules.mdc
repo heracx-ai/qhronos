@@ -1,0 +1,9 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+- always use sqlx instead of sql as database framework
+- always ask before implementing things
+- if there is an issue, please do root cause analysis and propose what to fix, do not directly fix the issue if not asked
+- if there is task, remember it, and recount all the tasks after finishing one task

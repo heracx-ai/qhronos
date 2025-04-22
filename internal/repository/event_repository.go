@@ -3,12 +3,13 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"time"
 
+	"github.com/feedloop/qhronos/internal/models"
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 	"github.com/lib/pq"
-	"github.com/feedloop/qhronos/internal/models"
 )
 
 type EventRepository struct {
@@ -19,187 +20,157 @@ func NewEventRepository(db *sqlx.DB) *EventRepository {
 	return &EventRepository{db: db}
 }
 
+func timePtr(t time.Time) *time.Time {
+	return &t
+}
+
 func (r *EventRepository) Create(ctx context.Context, event *models.Event) error {
 	query := `
-		INSERT INTO events (
-			id, title, start_time, webhook_url, payload, recurrence, tags, status, created_at
-		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9
-		)`
+		INSERT INTO events (id, name, description, schedule, start_time, metadata, webhook_url, tags, status, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		RETURNING id`
 
-	_, err := r.db.ExecContext(ctx, query,
+	now := time.Now()
+	event.ID = uuid.New()
+	event.CreatedAt = now
+	event.UpdatedAt = timePtr(now)
+	if event.Status == "" {
+		event.Status = models.EventStatusActive
+	}
+
+	err := r.db.QueryRowContext(ctx, query,
 		event.ID,
-		event.Title,
+		event.Name,
+		event.Description,
+		event.Schedule,
 		event.StartTime,
+		event.Metadata,
 		event.WebhookURL,
-		event.Payload,
-		event.Recurrence,
-		pq.Array(event.Tags),
+		event.Tags,
 		event.Status,
 		event.CreatedAt,
-	)
-	return err
+		event.UpdatedAt,
+	).Scan(&event.ID)
+
+	if err != nil {
+		return fmt.Errorf("error creating event: %w", err)
+	}
+
+	return nil
 }
 
 func (r *EventRepository) GetByID(ctx context.Context, id uuid.UUID) (*models.Event, error) {
-	query := `SELECT id, title, start_time, webhook_url, payload, recurrence, tags, status, created_at, updated_at FROM events WHERE id = $1 AND status != 'deleted'`
-	
-	// Use a temporary struct to handle the array type
-	var tempEvent struct {
-		ID         uuid.UUID   `db:"id"`
-		Title      string      `db:"title"`
-		StartTime  time.Time   `db:"start_time"`
-		WebhookURL string      `db:"webhook_url"`
-		Payload    []byte      `db:"payload"`
-		Recurrence *string     `db:"recurrence"`
-		Tags       pq.StringArray `db:"tags"`
-		Status     string      `db:"status"`
-		CreatedAt  time.Time   `db:"created_at"`
-		UpdatedAt  *time.Time  `db:"updated_at"`
+	query := `
+		SELECT id, name, description, schedule, start_time, metadata, webhook_url, tags, status, created_at, updated_at
+		FROM events
+		WHERE id = $1`
+
+	var event models.Event
+	err := r.db.GetContext(ctx, &event, query, id)
+	if err == sql.ErrNoRows {
+		return nil, nil
 	}
-	
-	err := r.db.GetContext(ctx, &tempEvent, query, id)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, err
+		return nil, fmt.Errorf("error getting event: %w", err)
 	}
 
-	// Convert to the actual Event struct
-	event := &models.Event{
-		ID:         tempEvent.ID,
-		Title:      tempEvent.Title,
-		StartTime:  tempEvent.StartTime,
-		WebhookURL: tempEvent.WebhookURL,
-		Payload:    tempEvent.Payload,
-		Recurrence: tempEvent.Recurrence,
-		Tags:       []string(tempEvent.Tags),
-		Status:     models.EventStatus(tempEvent.Status),
-		CreatedAt:  tempEvent.CreatedAt,
-		UpdatedAt:  tempEvent.UpdatedAt,
+	return &event, nil
+}
+
+func (r *EventRepository) List(ctx context.Context) ([]models.Event, error) {
+	query := `
+		SELECT id, name, description, schedule, start_time, metadata, webhook_url, tags, status, created_at, updated_at
+		FROM events
+		ORDER BY created_at DESC`
+
+	var events []models.Event
+	err := r.db.SelectContext(ctx, &events, query)
+	if err != nil {
+		return nil, fmt.Errorf("error listing events: %w", err)
 	}
 
-	return event, nil
+	return events, nil
 }
 
 func (r *EventRepository) Update(ctx context.Context, event *models.Event) error {
 	query := `
-		UPDATE events SET
-			title = $1,
-			start_time = $2,
-			webhook_url = $3,
-			payload = $4,
-			recurrence = $5,
-			tags = $6,
-			status = $7,
-			updated_at = $8
-		WHERE id = $9 AND status != 'deleted'`
+		UPDATE events
+		SET name = $1, description = $2, schedule = $3, start_time = $4, metadata = $5, webhook_url = $6, tags = $7, status = $8, updated_at = $9
+		WHERE id = $10
+		RETURNING id`
+
+	event.UpdatedAt = timePtr(time.Now())
 
 	result, err := r.db.ExecContext(ctx, query,
-		event.Title,
+		event.Name,
+		event.Description,
+		event.Schedule,
 		event.StartTime,
+		event.Metadata,
 		event.WebhookURL,
-		event.Payload,
-		event.Recurrence,
-		pq.Array(event.Tags),
+		event.Tags,
 		event.Status,
 		event.UpdatedAt,
 		event.ID,
 	)
+
 	if err != nil {
-		return err
+		return fmt.Errorf("error updating event: %w", err)
 	}
 
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		return err
+		return fmt.Errorf("error getting rows affected: %w", err)
 	}
 
 	if rowsAffected == 0 {
-		return sql.ErrNoRows
+		return models.ErrEventNotFound
 	}
 
 	return nil
 }
 
 func (r *EventRepository) Delete(ctx context.Context, id uuid.UUID) error {
-	// First check if the event exists and is not already deleted
-	var exists bool
-	err := r.db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM events WHERE id = $1 AND status != 'deleted')", id).Scan(&exists)
+	// First check if the event exists
+	query := `SELECT id FROM events WHERE id = $1`
+	var eventID uuid.UUID
+	err := r.db.GetContext(ctx, &eventID, query, id)
+	if err == sql.ErrNoRows {
+		return nil
+	}
 	if err != nil {
-		return err
-	}
-	if !exists {
-		return sql.ErrNoRows
+		return fmt.Errorf("error checking event existence: %w", err)
 	}
 
-	// Start a transaction to handle both event and occurrences
-	tx, err := r.db.BeginTx(ctx, nil)
+	// Update updated_at before deletion
+	updateQuery := `UPDATE events SET updated_at = $1 WHERE id = $2`
+	_, err = r.db.ExecContext(ctx, updateQuery, time.Now(), id)
 	if err != nil {
-		return err
+		return fmt.Errorf("error updating event before deletion: %w", err)
 	}
-	defer tx.Rollback()
 
-	now := time.Now()
-
-	// Delete associated occurrences first
-	_, err = tx.ExecContext(ctx, `DELETE FROM occurrences WHERE event_id = $1`, id)
+	// Delete the event
+	deleteQuery := `DELETE FROM events WHERE id = $1`
+	_, err = r.db.ExecContext(ctx, deleteQuery, id)
 	if err != nil {
-		return err
+		return fmt.Errorf("error deleting event: %w", err)
 	}
 
-	// Perform the soft delete on the event
-	_, err = tx.ExecContext(ctx, `UPDATE events SET status = 'deleted', updated_at = $1 WHERE id = $2 AND status != 'deleted'`, now, id)
-	if err != nil {
-		return err
-	}
-
-	return tx.Commit()
+	return nil
 }
 
-func (r *EventRepository) ListByTags(ctx context.Context, tags []string) ([]models.Event, error) {
+func (r *EventRepository) ListByTags(ctx context.Context, tags []string) ([]*models.Event, error) {
 	query := `
-		SELECT id, title, start_time, webhook_url, payload, recurrence, tags, status, created_at, updated_at
-		FROM events
-		WHERE tags @> $1 AND status != 'deleted'
+		SELECT id, name, description, schedule, start_time, metadata, webhook_url, tags, status, created_at, updated_at
+		FROM events 
+		WHERE tags && $1
 		ORDER BY created_at DESC
 	`
 
-	// Use a temporary struct to handle the array type
-	var tempEvents []struct {
-		ID         uuid.UUID   `db:"id"`
-		Title      string      `db:"title"`
-		StartTime  time.Time   `db:"start_time"`
-		WebhookURL string      `db:"webhook_url"`
-		Payload    []byte      `db:"payload"`
-		Recurrence *string     `db:"recurrence"`
-		Tags       pq.StringArray `db:"tags"`
-		Status     string      `db:"status"`
-		CreatedAt  time.Time   `db:"created_at"`
-		UpdatedAt  *time.Time  `db:"updated_at"`
-	}
-
-	err := r.db.SelectContext(ctx, &tempEvents, query, pq.Array(tags))
+	var events []*models.Event
+	err := r.db.SelectContext(ctx, &events, query, pq.Array(tags))
 	if err != nil {
-		return nil, err
-	}
-
-	// Convert to the actual Event struct
-	events := make([]models.Event, len(tempEvents))
-	for i, tempEvent := range tempEvents {
-		events[i] = models.Event{
-			ID:         tempEvent.ID,
-			Title:      tempEvent.Title,
-			StartTime:  tempEvent.StartTime,
-			WebhookURL: tempEvent.WebhookURL,
-			Payload:    tempEvent.Payload,
-			Recurrence: tempEvent.Recurrence,
-			Tags:       []string(tempEvent.Tags),
-			Status:     models.EventStatus(tempEvent.Status),
-			CreatedAt:  tempEvent.CreatedAt,
-			UpdatedAt:  tempEvent.UpdatedAt,
-		}
+		return nil, fmt.Errorf("error listing events by tags: %w", err)
 	}
 
 	return events, nil
