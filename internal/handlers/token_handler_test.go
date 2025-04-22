@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/feedloop/qhronos/internal/models"
-	"github.com/feedloop/qhronos/internal/service"
+	"github.com/feedloop/qhronos/internal/services"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -19,7 +19,7 @@ func TestTokenHandler(t *testing.T) {
 	// Setup
 	masterToken := "test-master-token"
 	jwtSecret := "test-jwt-secret"
-	tokenService := service.NewTokenService(masterToken, jwtSecret)
+	tokenService := services.NewTokenService(masterToken, jwtSecret)
 	handler := NewTokenHandler(tokenService)
 
 	router := gin.Default()
@@ -131,7 +131,7 @@ func TestTokenMiddleware(t *testing.T) {
 	// Setup
 	masterToken := "test-master-token"
 	jwtSecret := "test-jwt-secret"
-	tokenService := service.NewTokenService(masterToken, jwtSecret)
+	tokenService := services.NewTokenService(masterToken, jwtSecret)
 	handler := NewTokenHandler(tokenService)
 
 	router := gin.Default()

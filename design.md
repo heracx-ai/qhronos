@@ -2,27 +2,26 @@
 
 ## Overview
 
-**Qhronos** is a developer-first scheduling and webhook reminder service. It allows clients to schedule one-time or recurring events via API, store them durably, and trigger HTTP webhooks precisely when the time arrives. The system is designed for reliability, scalability, and simplicity, using PostgreSQL for persistence and Redis for high-speed dispatching.
+**Qhronos** is a developer-first scheduling and notification service. It allows clients to schedule one-time or recurring events via API, store them durably, and manage them through a simple REST interface. The system is designed for reliability and simplicity, using PostgreSQL for persistence.
 
 ---
 
 ## Value Proposition
 
 - **Durable by Design**: PostgreSQL-backed event and occurrence tracking ensures no data loss.
-- **High-Performance Scheduling**: Redis sorted sets enable millisecond-precision dispatching at scale.
 - **Developer Experience First**: Simple JSON APIs with intuitive semantics.
-- **Enterprise-Ready**: Recurring schedules, retries, HMAC signing, observability, and dead-letter queues.
-- **Flexible Architecture**: Stateless components, scalable workers, cloud or on-premise deployment.
+- **Enterprise-Ready**: Role-based access control, token management, and audit trail.
+- **Flexible Architecture**: Stateless components, scalable design, cloud or on-premise deployment.
 
 ---
 
 ## Key Features
 
 - Create, update, delete scheduled events via REST API.
-- Support for RFC-5545-based recurring events (e.g., weekly, every 3rd Thursday).
-- Reliable webhook delivery with configurable retries.
-- Separation of data durability (PostgreSQL) and dispatch performance (Redis).
-- Audit trail and metrics via Postgres and Prometheus.
+- Support for cron-like schedule expressions.
+- Role-based access control with JWT tokens.
+- Separation of concerns between data storage and business logic.
+- Audit trail via PostgreSQL.
 
 ---
 
@@ -36,19 +35,9 @@
        │                         │
        │                         └── stores: events, occurrences
        │
-       └─────► [Redis (ZSET)]
-                      ▲
+       └─────► [Token Service]
                       │
-       [Recurring Event Expander] (Go, cron job)
-                      │
-                      ▼
-            [Scheduler Worker(s) in Go]
-                      │
-                      ▼
-              [Webhook Dispatcher (Go)]
-                      │
-                      ▼
-             HTTP POST → External System
+                      └── manages: JWT tokens, access control
 ```
 
 ---
@@ -62,14 +51,14 @@
 ```sql
 CREATE TABLE events (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  title TEXT NOT NULL,
-  start_time TIMESTAMPTZ NOT NULL,
-  webhook_url TEXT NOT NULL,
-  payload JSONB NOT NULL,
-  recurrence TEXT NULL, -- RFC 5545
+  name TEXT NOT NULL,
+  description TEXT,
+  schedule TEXT NOT NULL,
   tags TEXT[] DEFAULT '{}',
-  status TEXT CHECK (status IN ('active', 'paused', 'deleted')) DEFAULT 'active',
-  created_at TIMESTAMPTZ DEFAULT now()
+  metadata JSONB DEFAULT '{}',
+  status TEXT CHECK (status IN ('active', 'deleted')) DEFAULT 'active',
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
 );
 ```
 
@@ -80,22 +69,13 @@ CREATE TABLE occurrences (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   event_id UUID REFERENCES events(id) ON DELETE CASCADE,
   scheduled_at TIMESTAMPTZ NOT NULL,
-  status TEXT CHECK (status IN ('scheduled', 'dispatched', 'failed')) DEFAULT 'scheduled',
-  last_attempt TIMESTAMPTZ,
-  attempt_count INT DEFAULT 0,
-  created_at TIMESTAMPTZ DEFAULT now()
+  status TEXT CHECK (status IN ('pending', 'completed', 'failed')) DEFAULT 'pending',
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
 );
 
-CREATE INDEX ON occurrences(scheduled_at) WHERE status = 'scheduled';
+CREATE INDEX ON occurrences(scheduled_at) WHERE status = 'pending';
 ```
-
----
-
-## Redis Structure
-
-- **Sorted Set**: `schedule:events`
-  - Member: `occurrence_id`
-  - Score: UNIX timestamp (ms or s) for scheduled time
 
 ---
 
@@ -121,30 +101,16 @@ Qhronos supports two authentication methods:
   ```json
   {
     "sub": "client_id_or_user_id",
-    "exp": 1714569600,
-    "access": "read" | "write" | "read_write" | "admin",
-    "scope": ["user:rizqme", "system:tester"]
+    "access": "read" | "write" | "admin",
+    "scope": ["user:rizqme", "system:tester"],
+    "expires_at": "2024-05-01T00:00:00Z"
   }
   ```
-- The `scope` field restricts access to events and occurrences that match **all** listed tags.
+- The `scope` field restricts access to events and occurrences that match the listed tags.
 - Access is limited based on the `access` field:
   - `read`: can view events and occurrences within scope
   - `write`: can create/update/delete within scope
-  - `read_write`: both read and write access
-  - `admin`: full access to all data, bypassing scope restrictionshttp Authorization: Bearer \<jwt\_token>
-  ```
-  ```
-- JWT payload must include:
-  ```json
-  {
-    "sub": "client_id_or_user_id",
-    "exp": 1714569600,
-    "access": "read" | "write" | "read_write",
-    "scope": ["user:rizqme", "system:tester"]
-  }
-  ```
-- The `scope` field restricts access to events and occurrences that match **all** listed tags.
-- Access is limited based on the `access` field (read-only, write-only, or both).
+  - `admin`: full access to all data, bypassing scope restrictions
 
 ---
 
@@ -159,29 +125,19 @@ Qhronos uses a single, static **Master Token** configured via the environment va
 
 - **Endpoint**
   ```http
-  POST /create_token
-  Authorization: Bearer <master_token> or Bearer <jwt_token>
+  POST /tokens
+  Authorization: Bearer <master_token>
   ```
 - **Request Body**
   ```json
   {
     "type": "jwt",
     "sub": "target_user_id",
-    "exp": 1714569600,
-    "access": "read" | "write" | "read_write" | "admin",
-    "scope": ["user:rizqme", "system:tester"]
+    "access": "read" | "write" | "admin",
+    "scope": ["user:rizqme", "system:tester"],
+    "expires_at": "2024-05-01T00:00:00Z"
   }
   ```
-- **Issuance Rules**
-  1. **Master Token Authentication**
-     - No restrictions: can issue JWTs for any `sub`, any `access`, any `scope`.
-  2. **JWT Authentication**
-     - **Admin-level JWT** (`access = "admin"`):
-       - Can issue JWTs for any `sub` and any `access` level, **but** the `scope` of the new token **must** be a subset of the issuer's `scope` (cannot create a superset of tags).
-     - **Non-admin JWT**:
-       - `sub` must equal the issuer's `sub` claim.
-       - `access` must be the same or lower privilege than the issuer's (order: `read` < `write` < `read_write`).
-       - `scope` must be a subset of the issuer's `scope`.
 - **Response**
   ```json
   {
@@ -190,9 +146,30 @@ Qhronos uses a single, static **Master Token** configured via the environment va
     "sub": "target_user_id",
     "access": "read",
     "scope": ["user:rizqme", "system:tester"],
-    "exp": 1714569600
+    "expires_at": "2024-05-01T00:00:00Z"
   }
   ```
+
+### Authentication Middleware
+
+The API includes an authentication middleware that validates JWT tokens and enforces access control:
+
+1. **Token Validation**:
+   - Checks for presence of Authorization header
+   - Validates token signature and expiration
+   - Extracts and validates claims
+
+2. **Access Control**:
+   - Master tokens bypass all restrictions
+   - JWT tokens are checked for:
+     - Required access level
+     - Required scope
+     - Token expiration
+
+3. **Error Responses**:
+   - `401 Unauthorized`: Missing or invalid token
+   - `403 Forbidden`: Insufficient access or scope
+   - `400 Bad Request`: Invalid token format or claims
 
 ---
 
@@ -206,14 +183,13 @@ Qhronos uses a single, static **Master Token** configured via the environment va
 
 ```json
 {
-  "title": "Team Sync",
-  "start_time": "2025-05-01T09:00:00Z",
-  "webhook_url": "https://app.com/hook",
-  "payload": {
-    "meetingId": "abc123"
-  },
+  "name": "Team Sync",
+  "description": "Weekly team sync meeting",
+  "schedule": "0 0 * * *",
   "tags": ["user:rizqme", "team:ai"],
-  "recurrence": "FREQ=WEEKLY;BYDAY=MO,WE,FR;INTERVAL=1"
+  "metadata": {
+    "meetingId": "abc123"
+  }
 }
 ```
 
@@ -222,16 +198,16 @@ Qhronos uses a single, static **Master Token** configured via the environment va
 ```json
 {
   "id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
-  "title": "Team Sync",
-  "start_time": "2025-05-01T09:00:00Z",
-  "webhook_url": "https://app.com/hook",
-  "payload": {
+  "name": "Team Sync",
+  "description": "Weekly team sync meeting",
+  "schedule": "0 0 * * *",
+  "tags": ["user:rizqme", "team:ai"],
+  "metadata": {
     "meetingId": "abc123"
   },
-  "tags": ["user:rizqme", "team:ai"],
-  "recurrence": "FREQ=WEEKLY;BYDAY=MO,WE,FR;INTERVAL=1",
   "status": "active",
-  "created_at": "2025-04-21T16:30:00Z"
+  "created_at": "2025-04-21T16:30:00Z",
+  "updated_at": "2025-04-21T16:30:00Z"
 }
 ```
 
@@ -243,10 +219,14 @@ Qhronos uses a single, static **Master Token** configured via the environment va
 
 ```json
 {
-  "title": "Updated Meeting",
-  "start_time": "2025-05-01T10:00:00Z",
-  "recurrence": null,
-  "status": "paused"
+  "name": "Updated Meeting",
+  "description": "Updated description",
+  "schedule": "0 0 * * *",
+  "tags": ["user:rizqme", "team:ai", "updated"],
+  "metadata": {
+    "meetingId": "abc123",
+    "newField": "value"
+  }
 }
 ```
 
@@ -255,16 +235,17 @@ Qhronos uses a single, static **Master Token** configured via the environment va
 ```json
 {
   "id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
-  "title": "Updated Meeting",
-  "start_time": "2025-05-01T10:00:00Z",
-  "webhook_url": "https://app.com/hook",
-  "payload": {
-    "meetingId": "abc123"
+  "name": "Updated Meeting",
+  "description": "Updated description",
+  "schedule": "0 0 * * *",
+  "tags": ["user:rizqme", "team:ai", "updated"],
+  "metadata": {
+    "meetingId": "abc123",
+    "newField": "value"
   },
-  "recurrence": null,
-  "status": "paused",
+  "status": "active",
   "created_at": "2025-04-21T16:30:00Z",
-  "updated_at": "2025-04-22T08:10:00Z"
+  "updated_at": "2025-04-21T17:30:00Z"
 }
 ```
 
@@ -277,16 +258,17 @@ Qhronos uses a single, static **Master Token** configured via the environment va
 ```json
 {
   "id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
-  "title": "Team Sync",
-  "start_time": "2025-05-01T09:00:00Z",
-  "webhook_url": "https://app.com/hook",
-  "payload": {
-    "meetingId": "abc123"
+  "name": "Updated Meeting",
+  "description": "Updated description",
+  "schedule": "0 0 * * *",
+  "tags": ["user:rizqme", "team:ai", "updated"],
+  "metadata": {
+    "meetingId": "abc123",
+    "newField": "value"
   },
-  "recurrence": "FREQ=WEEKLY;BYDAY=MO,WE,FR;INTERVAL=1",
-  "tags": ["user:rizqme", "team:ai"],
   "status": "active",
-  "created_at": "2025-04-21T16:30:00Z""2025-04-21T16:30:00Z"
+  "created_at": "2025-04-21T16:30:00Z",
+  "updated_at": "2025-04-21T17:30:00Z"
 }
 ```
 
@@ -294,70 +276,31 @@ Qhronos uses a single, static **Master Token** configured via the environment va
 
 **DELETE** `/events/{id}`
 
-**Response**
+**Response**: 200 OK
 
-```json
-{
-  "message": "Event deleted successfully"
-}
-```
+### List Events
 
-### Filter Events by Tags (AND condition)
-
-**GET** `/events?tags=user:rizqme,system:tester`
-
-- Accepts a comma-separated list of tags
-- Returns only events that match **all** provided tags
+**GET** `/events?tags=user:rizqme,team:ai`
 
 **Response**
 
 ```json
-{
-  "events": [
-    {
-      "id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
-      "title": "Team Sync",
-      "tags": ["user:rizqme", "team:ai"],
-      "start_time": "2025-05-01T09:00:00Z",
-      "status": "active""active"
-    }
-  ]
-}
-```
-
-### Filter Occurrences by Tags (AND condition)
-
-**GET** `/occurrences?tags=user:rizqme,system:tester&page=1&limit=50`
-
-- Filters occurrences whose parent event includes **all** specified tags.
-
-**Response**
-
-```json
-{
-  "occurrences": [
-    {
-      "id": "c1eaa746-b456-4e65-b239-51c045892ddb",
-      "scheduled_at": "2025-05-01T09:00:00Z",
-      "status": "scheduled",
-      "last_attempt": null,
-      "attempt_count": 0,
-      "tags": ["user:rizqme", "team:ai"]
+[
+  {
+    "id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+    "name": "Updated Meeting",
+    "description": "Updated description",
+    "schedule": "0 0 * * *",
+    "tags": ["user:rizqme", "team:ai", "updated"],
+    "metadata": {
+      "meetingId": "abc123",
+      "newField": "value"
     },
-    {
-      "id": "c1eaa746-b456-4e65-b239-51c045892ddc",
-      "scheduled_at": "2025-05-03T09:00:00Z",
-      "status": "scheduled",
-      "last_attempt": null,
-      "attempt_count": 0
-    }
-  ],
-  "pagination": {
-    "page": 1,
-    "limit": 50,
-    "total": 2
+    "status": "active",
+    "created_at": "2025-04-21T16:30:00Z",
+    "updated_at": "2025-04-21T17:30:00Z"
   }
-}
+]
 ```
 
 ### Get Occurrence
@@ -368,15 +311,50 @@ Qhronos uses a single, static **Master Token** configured via the environment va
 
 ```json
 {
-  "id": "c1eaa746-b456-4e65-b239-51c045892ddb",
+  "id": "25c5d4ba-9c2b-4824-9a7f-bb46d148d11b",
   "event_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
-  "scheduled_at": "2025-05-01T09:00:00Z",
-  "status": "dispatched",
-  "last_attempt": "2025-05-01T09:00:10Z",
-  "attempt_count": 1,
-  "tags": ["user:rizqme", "team:ai"]
+  "scheduled_at": "2025-04-22T00:00:00Z",
+  "status": "pending",
+  "created_at": "2025-04-21T16:30:00Z",
+  "updated_at": "2025-04-21T16:30:00Z"
 }
 ```
+
+### List Occurrences
+
+**GET** `/occurrences?tags=user:rizqme`
+
+**Response**
+
+```json
+[
+  {
+    "id": "25c5d4ba-9c2b-4824-9a7f-bb46d148d11b",
+    "event_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+    "scheduled_at": "2025-04-22T00:00:00Z",
+    "status": "pending",
+    "created_at": "2025-04-21T16:30:00Z",
+    "updated_at": "2025-04-21T16:30:00Z"
+  }
+]
+```
+
+## Error Responses
+
+The API uses standard HTTP status codes and returns error messages in the following format:
+
+```json
+{
+  "error": "Error message description"
+}
+```
+
+Common error codes:
+- 400: Bad Request - Invalid input data
+- 401: Unauthorized - Invalid or missing authentication
+- 403: Forbidden - Insufficient permissions
+- 404: Not Found - Resource not found
+- 500: Internal Server Error - Server-side error
 
 ---
 

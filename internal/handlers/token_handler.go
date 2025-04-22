@@ -6,14 +6,14 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/feedloop/qhronos/internal/models"
-	"github.com/feedloop/qhronos/internal/service"
+	"github.com/feedloop/qhronos/internal/services"
 )
 
 type TokenHandler struct {
-	tokenService *service.TokenService
+	tokenService *services.TokenService
 }
 
-func NewTokenHandler(tokenService *service.TokenService) *TokenHandler {
+func NewTokenHandler(tokenService *services.TokenService) *TokenHandler {
 	return &TokenHandler{
 		tokenService: tokenService,
 	}

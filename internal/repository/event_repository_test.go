@@ -23,6 +23,8 @@ func TestEventRepository(t *testing.T) {
 		require.NoError(t, err)
 		_, err = db.ExecContext(ctx, "TRUNCATE TABLE events CASCADE")
 		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, "DELETE FROM events WHERE status = 'deleted'")
+		require.NoError(t, err)
 	}
 
 	t.Run("Create and Get Event", func(t *testing.T) {

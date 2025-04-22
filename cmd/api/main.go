@@ -8,7 +8,7 @@ import (
 	"github.com/feedloop/qhronos/internal/database"
 	"github.com/feedloop/qhronos/internal/handlers"
 	"github.com/feedloop/qhronos/internal/repository"
-	"github.com/feedloop/qhronos/internal/service"
+	"github.com/feedloop/qhronos/internal/services"
 )
 
 func main() {
@@ -31,7 +31,7 @@ func main() {
 	occurrenceRepo := repository.NewOccurrenceRepository(db)
 
 	// Initialize services
-	tokenService := service.NewTokenService(
+	tokenService := services.NewTokenService(
 		getEnv("MASTER_TOKEN", "your-master-token-here"),
 		getEnv("JWT_SECRET", "your-jwt-secret-here"),
 	)
