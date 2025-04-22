@@ -105,6 +105,11 @@ auth:
   jwt_secret: "your-jwt-secret-here"
 ```
 
+### Authentication Configuration
+
+- `master_token`: The master token used to create JWT tokens
+- `jwt_secret`: The secret key used to sign JWT tokens
+
 ## Project Structure
 
 ```
@@ -153,3 +158,35 @@ go test ./...
 ## License
 
 MIT
+
+## API Endpoints
+
+### Authentication
+
+#### Create JWT Token
+```http
+POST /tokens
+Authorization: Bearer <master_token>
+
+{
+    "type": "jwt",
+    "sub": "target_user_id",
+    "access": "read",
+    "scope": ["user:rizqme", "system:tester"],
+    "expires_at": "2024-05-01T00:00:00Z"
+}
+```
+
+Response:
+```json
+{
+    "token": "<new_jwt_token>",
+    "type": "jwt",
+    "sub": "target_user_id",
+    "access": "read",
+    "scope": ["user:rizqme", "system:tester"],
+    "expires_at": "2024-05-01T00:00:00Z"
+}
+```
+
+### Events

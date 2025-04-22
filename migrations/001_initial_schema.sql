@@ -38,42 +38,27 @@ INSERT INTO system_config (key, value, description, updated_by) VALUES
 
 -- Events table with scheduling constraints
 CREATE TABLE events (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     title TEXT NOT NULL,
-    start_time TIMESTAMPTZ NOT NULL,
+    start_time TIMESTAMP WITH TIME ZONE NOT NULL,
     webhook_url TEXT NOT NULL,
-    payload JSONB NOT NULL,
-    recurrence TEXT, -- RFC 5545 format
-    tags TEXT[] DEFAULT '{}',
-    status TEXT CHECK (status IN ('active', 'paused', 'deleted', 'archived')) DEFAULT 'active',
-    created_at TIMESTAMPTZ DEFAULT now(),
-    updated_at TIMESTAMPTZ DEFAULT now(),
-    archived_at TIMESTAMPTZ,
-    CONSTRAINT valid_scheduling_period CHECK (
-        -- Ensure events are not scheduled too far in the future
-        start_time <= (now() + interval '365 days') AND
-        -- Ensure events are not scheduled too far in the past
-        start_time >= (now() - interval '30 days')
-    )
+    payload JSONB NOT NULL DEFAULT '{}',
+    recurrence TEXT,
+    tags TEXT[] NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE
 );
 
 -- Occurrences table with retention tracking
 CREATE TABLE occurrences (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    event_id UUID REFERENCES events(id) ON DELETE CASCADE,
-    scheduled_at TIMESTAMPTZ NOT NULL,
-    status TEXT CHECK (status IN ('scheduled', 'dispatched', 'failed', 'archived')) DEFAULT 'scheduled',
-    last_attempt TIMESTAMPTZ,
-    attempt_count INT DEFAULT 0,
-    created_at TIMESTAMPTZ DEFAULT now(),
-    updated_at TIMESTAMPTZ DEFAULT now(),
-    archived_at TIMESTAMPTZ,
-    CONSTRAINT valid_occurrence_period CHECK (
-        -- Ensure occurrences are not scheduled too far in the future
-        scheduled_at <= (now() + interval '365 days') AND
-        -- Ensure occurrences are not scheduled too far in the past
-        scheduled_at >= (now() - interval '30 days')
-    )
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    event_id UUID NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+    scheduled_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    last_attempt TIMESTAMP WITH TIME ZONE,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Webhook delivery attempts with retention period
