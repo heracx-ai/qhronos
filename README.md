@@ -65,9 +65,9 @@ Before running Qhronos, set up your configuration:
 ### Database Setup & Migration
 Before running Qhronos for the first time, initialize the PostgreSQL database and apply migrations:
 
-1. Start PostgreSQL (if not already running):
+1. Start PostgreSQL and Redis using Docker Compose:
    ```sh
-   ./scripts/db.sh start
+   docker-compose up -d postgres redis
    ```
 2. Run database migrations:
    ```sh
@@ -76,6 +76,46 @@ Before running Qhronos for the first time, initialize the PostgreSQL database an
    Or, if you use Docker Compose, the migrations may run automatically on startup.
 
 This will create all required tables and schema in your database.
+
+## Database Migration
+
+Qhronos uses a custom migration script to manage database schema changes. You can apply or roll back migrations using:
+
+```sh
+./scripts/migrate.sh up [N]
+./scripts/migrate.sh down [N]
+```
+
+- `up [N]`: Apply migrations. If you specify `N`, it will apply up to `N` new migrations. If you omit `N`, it will apply all pending migrations.
+- `down [N]`: Roll back migrations. If you specify `N`, it will roll back the last `N` applied migrations. If you omit `N`, it will roll back just the last migration.
+
+### Examples
+
+Apply all pending migrations:
+```sh
+./scripts/migrate.sh up
+```
+
+Apply only the next migration (one step):
+```sh
+./scripts/migrate.sh up 1
+```
+
+Roll back the last migration:
+```sh
+./scripts/migrate.sh down
+```
+
+Roll back the last 2 migrations:
+```sh
+./scripts/migrate.sh down 2
+```
+
+### Notes
+- The script uses Docker Compose to connect to the `qhronos_db` container.
+- It tracks applied migrations in a `schema_migrations` table.
+- Migration files should be named with incremental prefixes (e.g., `001_initial_schema.sql`, `002_add_table.sql`, etc.).
+- For rollbacks, you need a corresponding down migration file (e.g., `001_down.sql` for `001_initial_schema.sql`).
 
 ## API Usage
 See [API documentation](docs/api.md) for full details.
