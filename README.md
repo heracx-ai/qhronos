@@ -84,7 +84,11 @@ curl -X POST http://localhost:8080/events \
     "name": "Daily Backup",
     "start_time": "2024-03-20T00:00:00Z",
     "webhook_url": "https://example.com/webhook",
-    "schedule": "FREQ=DAILY;INTERVAL=1",
+    "schedule": {
+      "frequency": "weekly",
+      "interval": 1,
+      "by_day": ["MO", "WE", "FR"]
+    },
     "tags": ["system:backup"]
   }'
 ```
