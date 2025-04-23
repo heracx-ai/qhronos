@@ -1,628 +1,284 @@
-# Qhronos: Scheduling and Reminder System
+# Qhronos Design Document
 
-## Overview
+## 1. Introduction
 
-**Qhronos** is a developer-first scheduling and notification service. It allows clients to schedule one-time or recurring events via API, store them durably, and manage them through a simple REST interface. The system is designed for reliability and simplicity, using PostgreSQL for persistence and Redis for scheduling.
+Qhronos is a developer-first, event scheduling and notification platform. It enables clients to schedule one-time or recurring events via a simple REST API, persist them reliably, and receive notifications through webhooks. Qhronos is designed for reliability, scalability, and extensibility, making it suitable for both cloud and on-premise deployments.
 
----
+**Core Use Cases:**
+- Scheduling time-based notifications or reminders
+- Automating webhook calls for recurring business processes
+- Building workflow triggers based on time or recurrence rules
 
-## Value Proposition
-
-- **Durable by Design**: PostgreSQL-backed event and occurrence tracking ensures no data loss.
-- **Developer Experience First**: Simple JSON APIs with intuitive semantics.
-- **Enterprise-Ready**: Role-based access control, token management, and audit trail.
-- **Flexible Architecture**: Stateless components, scalable design, cloud or on-premise deployment.
-
----
-
-## Key Features
-
-- Create, update, delete scheduled events via REST API.
-- Support for iCalendar (RFC 5545) recurrence rules.
-- Role-based access control with JWT tokens.
-- Separation of concerns between data storage and business logic.
-- Audit trail via PostgreSQL.
-- Reliable webhook delivery with retries.
+**Value Proposition:**
+- Durable, auditable event and occurrence tracking (PostgreSQL-backed)
+- Simple, intuitive JSON APIs
+- Secure, role-based access control and token management
+- Reliable, retryable webhook delivery
+- Modular, stateless, and scalable architecture
 
 ---
 
-## System Architecture
+## 2. System Overview
 
-```plaintext
+### High-Level Architecture Diagram
+
+```
 [Client/API Consumer]
        │
        ▼
-   [API Service (Go)] ──────► [PostgreSQL]
-       │                         │
-       │                         └── stores: events, occurrences
+   [API Layer (Gin)]
        │
-       ├─────► [Token Service]
-       │              │
-       │              └── manages: JWT tokens, access control
+       ▼
+   [Handlers]
        │
-       ├─────► [Redis]
-       │         │
-       │         ├── schedule:events (ZSET)
-       │         └── recurring:events (HASH)
+       ▼
+   [Services] <─────────────┐
+       │                    │
+       ▼                    │
+   [Repositories]           │
+       │                    │
+       ▼                    │
+   [Database (Postgres)]    │
+                            │
+   [Middleware]─────────────┘
        │
-       ├─────► [Recurring Event Expander]
-       │              │
-       │              └── expands recurring events into occurrences
+       ▼
+   [Scheduler Layer] ──► [Redis]
        │
-       └─────► [Dispatcher]
-                      │
-                      └── delivers webhooks with retries
+       ▼
+   [Background Jobs: Expander, Dispatcher, Cleanup]
+       │
+       ▼
+   [Webhook Delivery]
 ```
+
+### Component Summary Table
+
+| Component         | Responsibility                                              |
+|-------------------|------------------------------------------------------------|
+| API Layer         | HTTP endpoints, routing, middleware wiring                  |
+| Handlers          | Request validation, business logic orchestration            |
+| Services          | Business logic, token/HMAC, scheduling logic                |
+| Repositories      | Data access (sqlx), persistence                            |
+| Database          | PostgreSQL, durable storage for events/occurrences         |
+| Middleware        | Logging, error handling, authentication, rate limiting      |
+| Scheduler Layer   | Expander, Dispatcher, Cleanup (background jobs)             |
+| Redis             | Scheduling, rate limiting, background job coordination      |
+| Webhook Delivery  | Reliable, retryable notification delivery                  |
 
 ---
 
-## Data Model
-
-### PostgreSQL
-
-#### `events`
-
-```sql
-CREATE TABLE events (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  name TEXT NOT NULL,
-  description TEXT,
-  start_time TIMESTAMPTZ NOT NULL,
-  webhook_url TEXT NOT NULL,
-  metadata JSONB DEFAULT '{}',
-  schedule TEXT,
-  tags TEXT[] DEFAULT '{}',
-  status TEXT CHECK (status IN ('active', 'paused', 'deleted')) DEFAULT 'active',
-  created_at TIMESTAMPTZ DEFAULT now(),
-  updated_at TIMESTAMPTZ
-);
-```
-
-#### `occurrences`
-
-```sql
-CREATE TABLE occurrences (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  event_id UUID NOT NULL REFERENCES events(id) ON DELETE CASCADE,
-  scheduled_at TIMESTAMPTZ NOT NULL,
-  status TEXT CHECK (status IN ('pending', 'scheduled', 'dispatched', 'completed', 'failed')) DEFAULT 'pending',
-  last_attempt TIMESTAMPTZ,
-  attempt_count INTEGER DEFAULT 0,
-  created_at TIMESTAMPTZ DEFAULT now()
-);
-```
-
----
-
-## Authentication
-
-Qhronos supports two authentication methods:
-
-### 1. Master Token (Static API Key)
-
-- Provided in header:
-  ```http
-  Authorization: Bearer <master_token>
-  ```
-- Grants full access to all endpoints without restriction.
-
-### 2. JWT Token
-
-- Provided in header:
-  ```http
-  Authorization: Bearer <jwt_token>
-  ```
-- JWT payload must include:
-  ```json
-  {
-    "sub": "client_id_or_user_id",
-    "access": "read" | "write" | "admin",
-    "scope": ["user:rizqme", "system:tester"],
-    "expires_at": "2024-05-01T00:00:00Z"
-  }
-  ```
-- The `scope` field restricts access to events and occurrences that match the listed tags.
-- Access is limited based on the `access` field:
-  - `read`: can view events and occurrences within scope
-  - `write`: can create/update/delete within scope
-  - `admin`: full access to all data, bypassing scope restrictions
-
-### Authentication Middleware
-
-The API includes an authentication middleware that validates JWT tokens and enforces access control:
-
-1. **Token Validation**:
-   - Checks for presence of Authorization header
-   - Validates token signature and expiration
-   - Extracts and validates claims
-
-2. **Access Control**:
-   - Master tokens bypass all restrictions
-   - JWT tokens are checked for:
-     - Required access level
-     - Required scope
-     - Token expiration
-
-3. **Error Responses**:
-   - `401 Unauthorized`: Missing or invalid token
-   - `403 Forbidden`: Insufficient access or scope
-   - `400 Bad Request`: Invalid token format or claims
-
----
-
-## Rate Limiting
-
-Qhronos implements a token-bucket rate limiting algorithm backed by Redis to protect the API from abuse and ensure fair usage. The rate limiter is implemented as middleware and can be configured per route or globally.
-
-### Implementation Details
-
-1. **Token Bucket Algorithm**:
-   - Uses Redis for distributed rate limiting
-   - Implements atomic operations using Redis MULTI/EXEC
-   - Supports token refill based on elapsed time
-   - Configurable bucket size and refill rate
-
-2. **Default Configuration**:
-   - Bucket Size: 100 requests
-   - Refill Rate: 10 requests per second
-   - Window: 1 second
-   - Key Format: `rate_limit:{token_id}`
-
-3. **Client Identification**:
-   - Primary: Token ID from JWT
-   - Fallback: Client IP address
-   - Supports per-token rate limiting
-
-4. **Response Headers**:
-   - `X-RateLimit-Limit`: Maximum requests per window
-   - `X-RateLimit-Remaining`: Remaining requests
-   - `X-RateLimit-Reset`: Time until reset
-   - `Retry-After`: Wait time when rate limited
-
-5. **Error Handling**:
-   - `429 Too Many Requests`: Rate limit exceeded
-   - `500 Internal Server Error`: Redis errors
-   - Includes error details in response body
-
-6. **Testing**:
-   - Comprehensive test suite covering:
-     - Basic rate limiting
-     - Token refill
-     - Per-token rate limiting
-     - Configuration options
-   - Uses test Redis database (DB 1)
-   - Verifies headers and response codes
-
-### Usage Example
-
-```go
-// Initialize rate limiter
-rateLimiter := middleware.NewRateLimiter(redisClient,
-    middleware.WithBucketSize(100),
-    middleware.WithRefillRate(10),
-    middleware.WithWindow(1),
-)
-
-// Apply to routes
-router.Use(rateLimiter.RateLimit())
-```
-
----
-
-## API Design
+## 3. Key Concepts
 
 ### Events
-
-#### Create Event
-
-**POST** `/events`
-
-Request:
-```json
-{
-  "name": "Team Sync",
-  "description": "Weekly team sync meeting",
-  "start_time": "2025-05-01T09:00:00Z",
-  "webhook_url": "https://app.com/hook",
-  "metadata": {
-    "meetingId": "abc123"
-  },
-  "schedule": "FREQ=WEEKLY;BYDAY=MO,WE,FR;INTERVAL=1",
-  "tags": ["user:rizqme", "team:ai"]
-}
-```
-
-Response:
-```json
-{
-  "id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
-  "name": "Team Sync",
-  "description": "Weekly team sync meeting",
-  "start_time": "2025-05-01T09:00:00Z",
-  "webhook_url": "https://app.com/hook",
-  "metadata": {
-    "meetingId": "abc123"
-  },
-  "schedule": "FREQ=WEEKLY;BYDAY=MO,WE,FR;INTERVAL=1",
-  "tags": ["user:rizqme", "team:ai"],
-  "status": "active",
-  "created_at": "2025-04-21T16:30:00Z"
-}
-```
-
-#### Get Event
-
-**GET** `/events/{id}`
-
-Response:
-```json
-{
-  "id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
-  "name": "Team Sync",
-  "description": "Weekly team sync meeting",
-  "start_time": "2025-05-01T09:00:00Z",
-  "webhook_url": "https://app.com/hook",
-  "metadata": {
-    "meetingId": "abc123"
-  },
-  "schedule": "FREQ=WEEKLY;BYDAY=MO,WE,FR;INTERVAL=1",
-  "tags": ["user:rizqme", "team:ai"],
-  "status": "active",
-  "created_at": "2025-04-21T16:30:00Z",
-  "updated_at": "2025-04-21T17:30:00Z"
-}
-```
-
-#### Update Event
-
-**PUT** `/events/{id}`
-
-Request:
-```json
-{
-  "name": "Updated Team Sync",
-  "description": "Updated weekly team sync meeting",
-  "schedule": "FREQ=WEEKLY;BYDAY=TU,TH;INTERVAL=1",
-  "tags": ["user:rizqme", "team:ai", "updated"]
-}
-```
-
-Response:
-```json
-{
-  "id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
-  "name": "Updated Team Sync",
-  "description": "Updated weekly team sync meeting",
-  "start_time": "2025-05-01T09:00:00Z",
-  "webhook_url": "https://app.com/hook",
-  "metadata": {
-    "meetingId": "abc123"
-  },
-  "schedule": "FREQ=WEEKLY;BYDAY=TU,TH;INTERVAL=1",
-  "tags": ["user:rizqme", "team:ai", "updated"],
-  "status": "active",
-  "created_at": "2025-04-21T16:30:00Z",
-  "updated_at": "2025-04-21T17:30:00Z"
-}
-```
-
-#### Delete Event
-
-**DELETE** `/events/{id}`
-
-Response: 200 OK
-
-#### List Events
-
-**GET** `/events?tags=user:rizqme,team:ai`
-
-Response:
-```json
-[
-  {
-    "id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
-    "name": "Updated Team Sync",
-    "description": "Updated weekly team sync meeting",
-    "start_time": "2025-05-01T09:00:00Z",
-    "webhook_url": "https://app.com/hook",
-    "metadata": {
-      "meetingId": "abc123"
-    },
-    "schedule": "FREQ=WEEKLY;BYDAY=TU,TH;INTERVAL=1",
-    "tags": ["user:rizqme", "team:ai", "updated"],
-    "status": "active",
-    "created_at": "2025-04-21T16:30:00Z",
-    "updated_at": "2025-04-21T17:30:00Z"
-  }
-]
-```
+An **Event** is a user-defined action or reminder, scheduled to occur at a specific time or on a recurring basis. Each event contains metadata, a webhook URL for notification, and optional recurrence rules.
 
 ### Occurrences
+An **Occurrence** represents a single scheduled execution of an event. For recurring events, multiple occurrences are generated according to the recurrence rules. Each occurrence tracks its status, attempts, and delivery history.
 
-#### Get Occurrence
+### Webhook Delivery
+When an occurrence is due, Qhronos delivers a webhook (HTTP POST) to the event's configured URL. Delivery is signed (HMAC) for security and retried on failure according to policy.
 
-**GET** `/occurrences/{id}`
+### Scheduling & Recurrence
+Qhronos supports both one-time and recurring events. Recurrence is defined using iCalendar (RFC 5545) rules. The scheduler expands recurring events into individual occurrences within a configurable lookahead window.
 
-Response:
-```json
-{
-  "id": "25c5d4ba-9c2b-4824-9a7f-bb46d148d11b",
-  "event_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
-  "scheduled_at": "2025-04-22T00:00:00Z",
-  "status": "pending",
-  "last_attempt": null,
-  "attempt_count": 0,
-  "created_at": "2025-04-21T16:30:00Z"
-}
-```
-
-#### List Occurrences
-
-**GET** `/occurrences?tags=user:rizqme`
-
-Response:
-```json
-[
-  {
-    "id": "25c5d4ba-9c2b-4824-9a7f-bb46d148d11b",
-    "event_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
-    "scheduled_at": "2025-04-22T00:00:00Z",
-    "status": "pending",
-    "last_attempt": null,
-    "attempt_count": 0,
-    "created_at": "2025-04-21T16:30:00Z"
-  }
-]
-```
-
-## Error Responses
-
-The API uses standard HTTP status codes and returns error messages in the following format:
-
-```json
-{
-  "error": "Error message description"
-}
-```
-
-Common error codes:
-- 400: Bad Request - Invalid input data
-- 401: Unauthorized - Invalid or missing authentication
-- 403: Forbidden - Insufficient permissions
-- 404: Not Found - Resource not found
-- 500: Internal Server Error - Server-side error
+### Authentication & Authorization
+Qhronos uses JWT tokens and a master token for API authentication. Access control is enforced via token scopes and roles, ensuring secure, multi-tenant operation.
 
 ---
 
-## Scheduler Logic
+## 4. Architecture Deep Dive
 
-### Event Creation Flow
+### API Layer
+- Built with Gin (Go web framework)
+- Exposes RESTful endpoints for all core resources
+- Applies global and route-specific middleware
 
-1. API receives event.
-2. Stores metadata in `events` table.
-3. If event has a schedule:
-   - Adds to Redis: `HSET recurring:events <event_id> <event_data>`
-4. Recurring Event Expander:
-   - Runs every 5 minutes
-   - Scans recurring events
-   - Computes next 24 hours of occurrences
-   - Adds to Redis: `ZADD schedule:events <timestamp> <occurrence_data>`
+### Handlers
+- Implement HTTP request handling for events, occurrences, tokens, and status
+- Validate input, invoke business logic, and format responses
 
-### Dispatcher Worker
+### Middleware
+- Cross-cutting concerns: logging, error handling, authentication, rate limiting
+- Ensures consistent request/response processing and security
 
-1. Runs every second
-2. Gets due events from Redis: `ZRANGEBYSCORE schedule:events 0 <now>`
-3. For each occurrence:
-   - Loads event from PostgreSQL
-   - Attempts `POST` to `webhook_url`
-   - On success: marks occurrence `dispatched`
-   - On failure:
-     - If retries < max: requeue with delay
-     - Else: mark as `failed`
-
----
-
-## Capacity Planning
-
-### PostgreSQL
-- Events table: ~1KB per event
-- Occurrences table: ~500B per occurrence
-- Estimated capacity: Millions of events and occurrences
-
-### Redis
-- Schedule events: ~400B per occurrence
-- Recurring events: ~1KB per event
-- 1GB Redis RAM → approx. 2.3 million occurrences
-
----
-
-## Deployment Architecture
-
-| Component         | Stack / Tool            |
-| ----------------- | ----------------------- |
-| API Backend       | Go (Gin)               |
-| Postgres DB       | PostgreSQL 14+         |
-| Scheduler Queue   | Redis 6+               |
-| Recurrence Parser | `rrule-go`             |
-| Containerization  | Docker / Kubernetes    |
-| Monitoring        | Prometheus + Grafana   |
-| Logging           | Loki or ELK Stack      |
-
----
-
-## Status Endpoint
-
-Expose a health and configuration overview via a **public** or **authenticated** endpoint.
-
-**GET** `/status`
-
-- **Auth**: optional for monitoring; if token provided, scope of response may be restricted.
-
-**Response** 200 OK
-
-```json
-{
-  "status": "ok",                  // overall health ("ok" | "degraded" | "down")
-  "uptime_seconds": 86400,         // seconds since service start
-  "version": "1.0.0",            // service version
-  "jwt": {
-    "issuer": "qhronos",
-    "algorithm": "HS256",
-    "default_exp_seconds": 3600,
-    "token_info": {
-      "sub": "rizqme",
-      "access": "read_write",
-      "scope": ["user:rizqme", "system:qa"],
-      "exp": 1714569600
-    }
-  "hmac": {
-    "algorithm": "HMAC-SHA256",
-    "signature_header": "X-Qhronos-Signature",
-    "default_secret": "qhronos.io",
-    "event_override_supported": true
-  }
-```
-
-- Clients may inspect the `hmac.event_override_supported` flag to know if individual events can specify a custom signing secret.
-
-## Future Enhancements
-
-- Webhook HMAC signing for validation
-- Multi-tenant org/user support
-- Admin dashboard for managing events
-- Dead-letter queue management UI
-- Rate-limited webhook batch dispatcher
-
----
-
-## Project Structure
-
-```
-qhronos/
-├── cmd/                    # Main application entry points
-│   ├── api/
-│   │   └── main.go
-│   └── server/
-│       └── main.go
-├── internal/               # Private application code
-│   ├── api/
-│   │   └── routes.go
-│   ├── config/
-│   │   └── config.go
-│   ├── database/
-│   │   └── postgres.go
-│   ├── handlers/
-│   │   ├── event_handler.go
-│   │   ├── event_handler_test.go
-│   │   ├── occurrence_handler.go
-│   │   ├── occurrence_handler_test.go
-│   │   ├── status.go
-│   │   ├── status_test.go
-│   │   ├── token_handler.go
-│   │   └── token_handler_test.go
-│   ├── middleware/
-│   │   ├── auth.go
-│   │   ├── error_handler.go
-│   │   ├── error_handler_test.go
-│   │   ├── logging.go
-│   │   ├── logging_test.go
-│   │   ├── rate_limit.go
-│   │   └── rate_limit_test.go
-│   ├── models/
-│   │   ├── errors.go
-│   │   ├── event.go
-│   │   ├── occurrence.go
-│   │   └── token.go
-│   ├── repository/
-│   │   ├── event_repository.go
-│   │   ├── event_repository_test.go
-│   │   ├── occurrence_repository.go
-│   │   └── occurrence_repository_test.go
-│   ├── services/
-│   │   ├── hmac_service.go
-│   │   ├── hmac_service_test.go
-│   │   ├── token_service.go
-│   │   └── scheduler/
-│   │       ├── cleanup.go
-│   │       ├── cleanup_test.go
-│   │       ├── dispatcher.go
-│   │       ├── dispatcher_test.go
-│   │       ├── expander.go
-│   │       ├── expander_test.go
-│   │       ├── schedule.go
-│   │       ├── scheduler.go
-│   │       └── scheduler_test.go
-│   ├── testutils/
-│   │   ├── db.go
-│   │   ├── test_helpers.go
-│   │   └── testutils.go
-│   └── utils/              # Shared utilities (currently empty)
-├── migrations/             # Database migration scripts
-├── pkg/                    # Public packages (auth, database, redis)
-│   ├── auth/
-│   ├── database/
-│   └── redis/
-├── scripts/                # Utility scripts for development and ops
-│   ├── apply_migrations.sh
-│   ├── db.sh
-│   ├── redis.sh
-│   └── test.sh
-├── config.example.yaml     # Example configuration
-├── design.md               # This design document
-├── docker-compose.yml      # Docker development environment
-├── go.mod                  # Go module definition
-├── go.sum                  # Go module checksums
-├── LICENSE                 # Project license
-└── README.md               # Project documentation
-```
-
-## Error Handling Patterns
+### Services
+- Encapsulate business logic not directly tied to HTTP or data access
+- Examples: token management, HMAC signing, scheduling logic
 
 ### Repository Layer
+- Data access layer using sqlx for PostgreSQL
+- Implements CRUD operations for events and occurrences
+- Maps Go models to database tables
 
-The repository layer follows a consistent pattern for handling not found cases:
+### Scheduler Layer
+- Background jobs for event expansion, webhook dispatch, and cleanup
+- Expander: generates occurrences for recurring events
+- Dispatcher: delivers webhooks for due occurrences, handles retries
+- Cleanup: archives old data and enforces retention policies
+- Uses Redis for coordination and scheduling
 
-1. **Get Operations**:
-   - When a resource is not found, return `(nil, nil)`
-   - This applies to methods like `GetByID`, `GetByName`, etc.
-   - Example:
-     ```go
-     event, err := repo.GetByID(ctx, id)
-     if err != nil {
-         return nil, err
-     }
-     if event == nil {
-         return nil, nil  // Resource not found
-     }
-     ```
+### Models
+- Defines data structures for events, occurrences, tokens, and errors
+- Used throughout handlers, services, and repositories
 
-2. **Delete Operations**:
-   - When deleting a non-existent resource, return `nil`
-   - This applies to methods like `Delete`, `DeleteByID`, etc.
-   - Example:
-     ```go
-     err := repo.Delete(ctx, id)
-     if err != nil {
-         return err
-     }
-     return nil  // Success, even if resource didn't exist
-     ```
+### Database
+- PostgreSQL is the source of truth for all persistent data
+- Schema includes tables for events, occurrences, webhook attempts, analytics, and archives
+- Indexes and triggers support performance and data integrity
 
-3. **Update Operations**:
-   - When updating a non-existent resource, return `nil, nil`
-   - This applies to methods like `Update`, `UpdateByID`, etc.
-   - Example:
-     ```go
-     updated, err := repo.Update(ctx, id, update)
-     if err != nil {
-         return nil, err
-     }
-     if updated == nil {
-         return nil, nil  // Resource not found
-     }
-     ```
+### Configuration
+- Loads settings from YAML files and environment variables
+- Centralizes configuration for database, Redis, authentication, scheduler, and more
 
-This pattern ensures consistent behavior across all repositories and simplifies error handling in the service layer.
+## 5. Business Logic Flows
+
+### Event Lifecycle
+- **Create:** Client sends a POST request to `/events` with event details. The handler validates input and stores the event in the database. If the event is recurring, it is marked for expansion.
+- **Update:** Client sends a PUT request to `/events/{id}`. The handler validates and updates the event in the database. Changes to recurrence or schedule are reflected in future occurrences.
+- **Delete:** Client sends a DELETE request to `/events/{id}`. The event and its future occurrences are removed or archived according to retention policy.
+
+### Recurring Event Expansion
+- The Expander job periodically scans for recurring events that need new occurrences generated (based on lookahead window).
+- For each event, it computes the next set of occurrences and inserts them into the database.
+
+### Occurrence State Transitions
+- Occurrences are created with status `pending`.
+- When scheduled for delivery, status changes to `scheduled`.
+- On successful webhook delivery, status becomes `dispatched` or `completed`.
+- On failure, status is set to `failed` after max retries.
+
+### Webhook Dispatch & Retry
+- The Dispatcher job finds due occurrences (status `scheduled` and time <= now).
+- Attempts to deliver the webhook to the event's URL, signing with HMAC if configured.
+- On success, updates status and logs the attempt.
+- On failure, increments attempt count and retries with backoff, up to a maximum.
+
+### Token Management
+- Admins can create JWT tokens via the `/tokens` endpoint.
+- Tokens encode access level and scope, controlling API permissions.
+
+### Rate Limiting
+- Each request is checked against a Redis-backed token bucket rate limiter.
+- Exceeding the limit results in a 429 response.
+
+### Archiving & Retention
+- The Cleanup job periodically archives old events, occurrences, and webhook attempts based on retention policies.
+- Archived data is moved to separate tables for long-term storage.
+
+### Health & Status Endpoints
+- `/status` and `/health` endpoints provide service health and configuration information for monitoring and automation.
+
+---
+
+## 6. Data Model
+
+### Entity-Relationship Diagram (Text-Based)
+
+```
+[events] <1-----n> [occurrences] <1-----n> [webhook_attempts]
+   |                        |
+   |                        +----< archived_occurrences >
+   +----< archived_events >
+
+[system_config] (global config)
+[analytics_daily], [analytics_hourly], [performance_metrics] (aggregates)
+```
+
+### Table Descriptions
+
+- **events:** Stores event definitions, metadata, schedule, and webhook configuration.
+- **occurrences:** Each row represents a scheduled execution of an event, with status and delivery tracking.
+- **webhook_attempts:** Logs each attempt to deliver a webhook for an occurrence, including status and response.
+- **archived_events / archived_occurrences / archived_webhook_attempts:** Long-term storage for data past retention windows.
+- **system_config:** Stores global configuration and retention policies.
+- **analytics_daily / analytics_hourly:** Aggregated statistics for monitoring and reporting.
+- **performance_metrics:** Tracks system and infrastructure performance over time.
+
+## 7. API Reference
+
+### Endpoint Summary
+
+| Method | Path                  | Description                        |
+|--------|-----------------------|------------------------------------|
+| POST   | /events               | Create a new event                 |
+| GET    | /events/{id}          | Get event by ID                    |
+| PUT    | /events/{id}          | Update event by ID                 |
+| DELETE | /events/{id}          | Delete event by ID                 |
+| GET    | /events               | List events (filterable by tags)   |
+| GET    | /occurrences/{id}     | Get occurrence by ID               |
+| GET    | /occurrences          | List occurrences (filterable)      |
+| POST   | /tokens               | Create a new JWT token (admin)     |
+| GET    | /status               | Service status and health info     |
+| GET    | /health               | Simple health check                |
+
+### Request/Response Patterns
+- All endpoints use JSON for request and response bodies.
+- Standard HTTP status codes are used for success and error signaling.
+- Error responses follow the format: `{ "error": "message" }`.
+
+### Error Handling
+- 400: Bad Request (invalid input)
+- 401: Unauthorized (missing/invalid token)
+- 403: Forbidden (insufficient permissions)
+- 404: Not Found (resource does not exist)
+- 429: Too Many Requests (rate limit exceeded)
+- 500: Internal Server Error
+
+## 8. Security
+
+### Authentication
+- **Master Token:** A static API key with full access, provided in the `Authorization: Bearer <master_token>` header.
+- **JWT Token:** Issued via `/tokens` endpoint (admin only). Encodes user, access level, and scope. Provided in the `Authorization: Bearer <jwt_token>` header.
+
+### Authorization
+- Access is controlled by token type, access level (`read`, `write`, `admin`), and scope (tags).
+- Master token bypasses all restrictions. JWT tokens are checked for required access and scope.
+
+### Webhook HMAC Signing
+- All webhook deliveries are signed using HMAC-SHA256.
+- The signature is included in the `X-Qhronos-Signature` header.
+- Each event can specify a custom secret, or use the system default.
+- Recipients should verify the signature to ensure authenticity.
+
+## 9. Operational Concerns
+
+### Deployment
+- Qhronos is designed for containerized deployment (Docker/Kubernetes).
+- Requires PostgreSQL and Redis as external dependencies.
+- Configuration is managed via YAML files and environment variables.
+
+### Monitoring & Observability
+- Exposes `/status` and `/health` endpoints for liveness and readiness checks.
+- Metrics can be exported to Prometheus/Grafana for monitoring.
+- Logs are structured and suitable for aggregation (e.g., ELK, Loki).
+
+### Scaling
+- Stateless API and background workers can be horizontally scaled.
+- Database and Redis should be provisioned for high availability and throughput.
+
+### Backup & Disaster Recovery
+- Regular backups of PostgreSQL are recommended (e.g., pg_dump, managed backups).
+- Redis persistence should be enabled for recovery of in-flight jobs.
+- Disaster recovery procedures should include restoring both database and Redis state.
+
+---
+
+## 10. Extensibility & Future Enhancements
+
+### Planned Features
+- Webhook HMAC signing validation improvements
+- Multi-tenant organization/user support
+- Admin dashboard for event and system management
+- Dead-letter queue management UI
+- Rate-limited webhook batch dispatcher
+- Enhanced analytics and reporting
+
+### Extension Points
+- New event types or scheduling strategies
+- Custom authentication providers
+- Additional notification channels (e.g., email, SMS)
+- Pluggable storage or queue backends
 
 ---
 
