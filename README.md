@@ -1,6 +1,5 @@
 # Qhronos: Reliable Scheduling & Webhook Delivery
 
-[![Build Status](#)](#) [![Go Version](#)](#) [![License: MIT](LICENSE)
 
 ## Table of Contents
 - [Overview](#overview)
@@ -15,6 +14,10 @@
 - [Troubleshooting & FAQ](#troubleshooting--faq)
 - [License](#license)
 - [Links & References](#links--references)
+
+## API Documentation
+
+See [docs/api.md](docs/api.md) for full API details and example requests/responses.
 
 ## Overview
 Qhronos is a developer-first scheduling and notification platform. It lets you schedule one-time or recurring events and reliably delivers webhooks at the right time. Built for reliability, security, and extensibility, Qhronos is ideal for automating workflows, orchestrating AI agents, and managing time-based triggers in distributed systems.
