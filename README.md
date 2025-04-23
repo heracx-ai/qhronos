@@ -19,6 +19,8 @@
 ## Overview
 Qhronos is a developer-first scheduling and notification platform. It lets you schedule one-time or recurring events and reliably delivers webhooks at the right time. Built for reliability, security, and extensibility, Qhronos is ideal for automating workflows, orchestrating AI agents, and managing time-based triggers in distributed systems.
 
+For system architecture and in-depth design, see [design.md](./design.md).
+
 ## Features
 - REST API for event scheduling
 - Recurring and one-time events (iCalendar RFC 5545)
