@@ -20,6 +20,9 @@ func SetupRoutes(router *gin.Engine, eventHandler *handlers.EventHandler, occurr
 	public := router.Group("/")
 	{
 		public.GET("/status", handlers.StatusHandler)
+		public.GET("/health", func(c *gin.Context) {
+			c.JSON(200, gin.H{"status": "ok"})
+		})
 	}
 
 	// Protected routes with rate limiting
@@ -54,4 +57,4 @@ func SetupRoutes(router *gin.Engine, eventHandler *handlers.EventHandler, occurr
 			tokens.POST("", tokenHandler.CreateToken)
 		}
 	}
-} 
+}

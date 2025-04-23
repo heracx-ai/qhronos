@@ -16,8 +16,8 @@ import (
 	"github.com/feedloop/qhronos/internal/handlers"
 	"github.com/feedloop/qhronos/internal/middleware"
 	"github.com/feedloop/qhronos/internal/repository"
+	"github.com/feedloop/qhronos/internal/scheduler"
 	"github.com/feedloop/qhronos/internal/services"
-	"github.com/feedloop/qhronos/internal/services/scheduler"
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 )
@@ -116,4 +116,4 @@ func main() {
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal("Server error:", err)
 	}
-} 
+}
