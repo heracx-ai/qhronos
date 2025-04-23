@@ -50,6 +50,13 @@ func main() {
 
 	// Initialize scheduler services
 	schedulerService := scheduler.NewScheduler(redisClient)
+	expander := scheduler.NewExpander(
+		schedulerService,
+		eventRepo,
+		occurrenceRepo,
+		cfg.Scheduler.LookAheadDuration,
+		cfg.Scheduler.ExpansionInterval,
+	)
 
 	// Initialize services
 	tokenService := services.NewTokenService(cfg.Auth.MasterToken, cfg.Auth.JWTSecret)
@@ -76,8 +83,14 @@ func main() {
 		Handler: router,
 	}
 
-	// Start scheduler and dispatcher in background
+	// Start scheduler services in background
 	ctx := context.Background()
+	go func() {
+		if err := expander.Run(ctx); err != nil {
+			log.Printf("Expander error: %v", err)
+		}
+	}()
+
 	go func() {
 		if err := dispatcher.Run(ctx, schedulerService); err != nil {
 			log.Printf("Dispatcher error: %v", err)

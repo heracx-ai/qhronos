@@ -500,26 +500,80 @@ Expose a health and configuration overview via a **public** or **authenticated**
 ```
 qhronos/
 ├── cmd/                    # Main application entry points
-├── internal/              # Private application code
-│   ├── api/              # API definitions and interfaces
-│   ├── config/           # Configuration management
-│   ├── database/         # Database connection and setup
-│   ├── handlers/         # HTTP request handlers
-│   ├── models/           # Data models and structures
-│   ├── repository/       # Data access layer
-│   ├── services/         # Business logic
-│   ├── testutils/        # Testing utilities
-│   └── utils/            # Shared utilities
-├── migrations/           # Database migration scripts
-├── pkg/                  # Public packages
-├── scripts/             # Utility scripts
-├── tests/               # Integration and end-to-end tests
-├── config.example.yaml  # Example configuration
-├── design.md           # This design document
-├── docker-compose.yml  # Docker development environment
-├── go.mod              # Go module definition
-├── go.sum              # Go module checksums
-└── README.md           # Project documentation
+│   ├── api/
+│   │   └── main.go
+│   └── server/
+│       └── main.go
+├── internal/               # Private application code
+│   ├── api/
+│   │   └── routes.go
+│   ├── config/
+│   │   └── config.go
+│   ├── database/
+│   │   └── postgres.go
+│   ├── handlers/
+│   │   ├── event_handler.go
+│   │   ├── event_handler_test.go
+│   │   ├── occurrence_handler.go
+│   │   ├── occurrence_handler_test.go
+│   │   ├── status.go
+│   │   ├── status_test.go
+│   │   ├── token_handler.go
+│   │   └── token_handler_test.go
+│   ├── middleware/
+│   │   ├── auth.go
+│   │   ├── error_handler.go
+│   │   ├── error_handler_test.go
+│   │   ├── logging.go
+│   │   ├── logging_test.go
+│   │   ├── rate_limit.go
+│   │   └── rate_limit_test.go
+│   ├── models/
+│   │   ├── errors.go
+│   │   ├── event.go
+│   │   ├── occurrence.go
+│   │   └── token.go
+│   ├── repository/
+│   │   ├── event_repository.go
+│   │   ├── event_repository_test.go
+│   │   ├── occurrence_repository.go
+│   │   └── occurrence_repository_test.go
+│   ├── services/
+│   │   ├── hmac_service.go
+│   │   ├── hmac_service_test.go
+│   │   ├── token_service.go
+│   │   └── scheduler/
+│   │       ├── cleanup.go
+│   │       ├── cleanup_test.go
+│   │       ├── dispatcher.go
+│   │       ├── dispatcher_test.go
+│   │       ├── expander.go
+│   │       ├── expander_test.go
+│   │       ├── schedule.go
+│   │       ├── scheduler.go
+│   │       └── scheduler_test.go
+│   ├── testutils/
+│   │   ├── db.go
+│   │   ├── test_helpers.go
+│   │   └── testutils.go
+│   └── utils/              # Shared utilities (currently empty)
+├── migrations/             # Database migration scripts
+├── pkg/                    # Public packages (auth, database, redis)
+│   ├── auth/
+│   ├── database/
+│   └── redis/
+├── scripts/                # Utility scripts for development and ops
+│   ├── apply_migrations.sh
+│   ├── db.sh
+│   ├── redis.sh
+│   └── test.sh
+├── config.example.yaml     # Example configuration
+├── design.md               # This design document
+├── docker-compose.yml      # Docker development environment
+├── go.mod                  # Go module definition
+├── go.sum                  # Go module checksums
+├── LICENSE                 # Project license
+└── README.md               # Project documentation
 ```
 
 ## Error Handling Patterns

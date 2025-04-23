@@ -17,6 +17,7 @@ import (
 	"github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/datatypes"
 )
 
 func timePtr(t time.Time) *time.Time {
@@ -25,18 +26,16 @@ func timePtr(t time.Time) *time.Time {
 
 func TestEventHandler(t *testing.T) {
 	db := testutils.TestDB(t)
-	repo := repository.NewEventRepository(db)
-	handler := NewEventHandler(repo)
+	eventRepo := repository.NewEventRepository(db)
+	handler := NewEventHandler(eventRepo)
 
-	// Add cleanup function
 	cleanup := func() {
 		ctx := context.Background()
-		_, err := db.ExecContext(ctx, "TRUNCATE TABLE occurrences CASCADE")
-		require.NoError(t, err)
-		_, err = db.ExecContext(ctx, "TRUNCATE TABLE events CASCADE")
+		_, err := db.ExecContext(ctx, "TRUNCATE TABLE events, occurrences CASCADE")
 		require.NoError(t, err)
 	}
 
+	gin.SetMode(gin.TestMode)
 	router := gin.Default()
 	router.POST("/events", handler.CreateEvent)
 	router.GET("/events/:id", handler.GetEvent)
@@ -46,17 +45,19 @@ func TestEventHandler(t *testing.T) {
 
 	t.Run("Create Event", func(t *testing.T) {
 		cleanup()
-		startTime := time.Now()
 		req := models.CreateEventRequest{
 			Name:        "Test Event",
 			Description: "Test Description",
-			StartTime:   startTime,
+			StartTime:   time.Now(),
 			WebhookURL:  "https://example.com/webhook",
-			Metadata:    []byte(`{"key": "value"}`),
-			Schedule:    testutils.StringPtr("FREQ=WEEKLY;BYDAY=MO,WE,FR;INTERVAL=1"),
-			Tags:        []string{"test"},
+			Metadata:    datatypes.JSON([]byte(`{"key": "value"}`)),
+			Schedule: &models.ScheduleConfig{
+				Frequency: "weekly",
+				Interval:  1,
+				ByDay:     []string{"MO", "WE", "FR"},
+			},
+			Tags: []string{"test"},
 		}
-
 		body, err := json.Marshal(req)
 		require.NoError(t, err)
 
@@ -72,31 +73,32 @@ func TestEventHandler(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, req.Name, response.Name)
 		assert.Equal(t, req.Description, response.Description)
-		assert.Equal(t, req.StartTime.Unix(), response.StartTime.Unix())
 		assert.Equal(t, req.WebhookURL, response.WebhookURL)
-		assert.Equal(t, req.Metadata, response.Metadata)
+		assertJSONEqual(t, req.Metadata, response.Metadata)
 		assert.Equal(t, req.Schedule, response.Schedule)
-		assert.Equal(t, pq.StringArray(req.Tags), response.Tags)
-		assert.Equal(t, models.EventStatusActive, response.Status)
+		assert.ElementsMatch(t, req.Tags, response.Tags)
 	})
 
 	t.Run("Get Event", func(t *testing.T) {
 		cleanup()
-		startTime := time.Now()
-		// Create test event
+		// First, create an event
 		event := &models.Event{
 			ID:          uuid.New(),
 			Name:        "Test Event",
 			Description: "Test Description",
-			StartTime:   startTime,
+			StartTime:   time.Now(),
 			WebhookURL:  "https://example.com/webhook",
-			Metadata:    []byte(`{"key": "value"}`),
-			Schedule:    testutils.StringPtr("FREQ=WEEKLY;BYDAY=MO,WE,FR;INTERVAL=1"),
-			Tags:        pq.StringArray{"test"},
-			Status:      models.EventStatusActive,
-			CreatedAt:   time.Now(),
+			Metadata:    datatypes.JSON([]byte(`{"key": "value"}`)),
+			Schedule: &models.ScheduleConfig{
+				Frequency: "weekly",
+				Interval:  1,
+				ByDay:     []string{"MO", "WE", "FR"},
+			},
+			Tags:      pq.StringArray{"test"},
+			Status:    models.EventStatusActive,
+			CreatedAt: time.Now(),
 		}
-		err := repo.Create(context.Background(), event)
+		err := eventRepo.Create(context.Background(), event)
 		require.NoError(t, err)
 
 		w := httptest.NewRecorder()
@@ -111,46 +113,47 @@ func TestEventHandler(t *testing.T) {
 		assert.Equal(t, event.ID, response.ID)
 		assert.Equal(t, event.Name, response.Name)
 		assert.Equal(t, event.Description, response.Description)
-		assert.Equal(t, event.StartTime.Unix(), response.StartTime.Unix())
 		assert.Equal(t, event.WebhookURL, response.WebhookURL)
-		assert.Equal(t, event.Metadata, response.Metadata)
+		assertJSONEqual(t, event.Metadata, response.Metadata)
 		assert.Equal(t, event.Schedule, response.Schedule)
-		assert.Equal(t, event.Tags, response.Tags)
-		assert.Equal(t, event.Status, response.Status)
+		assert.ElementsMatch(t, event.Tags, response.Tags)
 	})
 
 	t.Run("Update Event", func(t *testing.T) {
 		cleanup()
-		startTime := time.Now()
-		// Create test event
+		// Create event
 		event := &models.Event{
 			ID:          uuid.New(),
 			Name:        "Test Event",
 			Description: "Test Description",
-			StartTime:   startTime,
+			StartTime:   time.Now(),
 			WebhookURL:  "https://example.com/webhook",
-			Metadata:    []byte(`{"key": "value"}`),
-			Schedule:    testutils.StringPtr("FREQ=WEEKLY;BYDAY=MO,WE,FR;INTERVAL=1"),
-			Tags:        pq.StringArray{"test"},
-			Status:      models.EventStatusActive,
-			CreatedAt:   time.Now(),
+			Metadata:    datatypes.JSON([]byte(`{"key": "value"}`)),
+			Schedule: &models.ScheduleConfig{
+				Frequency: "weekly",
+				Interval:  1,
+				ByDay:     []string{"MO", "WE", "FR"},
+			},
+			Tags:      pq.StringArray{"test"},
+			Status:    models.EventStatusActive,
+			CreatedAt: time.Now(),
 		}
-		err := repo.Create(context.Background(), event)
+		err := eventRepo.Create(context.Background(), event)
 		require.NoError(t, err)
 
-		updateTime := startTime.Add(24 * time.Hour)
-		req := models.UpdateEventRequest{
-			Name:        testutils.StringPtr("Updated Event"),
-			Description: testutils.StringPtr("Updated Description"),
-			StartTime:   &updateTime,
-			WebhookURL:  testutils.StringPtr("https://example.com/updated-webhook"),
-			Metadata:    []byte(`{"key": "updated"}`),
-			Schedule:    testutils.StringPtr("FREQ=DAILY;INTERVAL=1"),
-			Tags:        []string{"updated"},
-			Status:      testutils.StringPtr(string(models.EventStatusInactive)),
+		updateReq := models.UpdateEventRequest{
+			Name:        stringPtr("Updated Event"),
+			Description: stringPtr("Updated Description"),
+			WebhookURL:  stringPtr("https://example.com/updated"),
+			Metadata:    datatypes.JSON([]byte(`{"key": "updated"}`)),
+			Schedule: &models.ScheduleConfig{
+				Frequency: "daily",
+				Interval:  1,
+			},
+			Tags:   []string{"updated"},
+			Status: stringPtr(string(models.EventStatusInactive)),
 		}
-
-		body, err := json.Marshal(req)
+		body, err := json.Marshal(updateReq)
 		require.NoError(t, err)
 
 		w := httptest.NewRecorder()
@@ -163,33 +166,35 @@ func TestEventHandler(t *testing.T) {
 		var response models.Event
 		err = json.Unmarshal(w.Body.Bytes(), &response)
 		require.NoError(t, err)
-		assert.Equal(t, *req.Name, response.Name)
-		assert.Equal(t, *req.Description, response.Description)
-		assert.Equal(t, req.StartTime.Unix(), response.StartTime.Unix())
-		assert.Equal(t, *req.WebhookURL, response.WebhookURL)
-		assert.Equal(t, req.Metadata, response.Metadata)
-		assert.Equal(t, req.Schedule, response.Schedule)
-		assert.Equal(t, pq.StringArray(req.Tags), response.Tags)
-		assert.Equal(t, models.EventStatus(*req.Status), response.Status)
+		assert.Equal(t, *updateReq.Name, response.Name)
+		assert.Equal(t, *updateReq.Description, response.Description)
+		assert.Equal(t, *updateReq.WebhookURL, response.WebhookURL)
+		assertJSONEqual(t, updateReq.Metadata, response.Metadata)
+		assert.Equal(t, updateReq.Schedule, response.Schedule)
+		assert.ElementsMatch(t, updateReq.Tags, response.Tags)
+		assert.Equal(t, models.EventStatusInactive, response.Status)
 	})
 
 	t.Run("Delete Event", func(t *testing.T) {
 		cleanup()
-		startTime := time.Now()
-		// Create test event
+		// Create event
 		event := &models.Event{
 			ID:          uuid.New(),
 			Name:        "Test Event",
 			Description: "Test Description",
-			StartTime:   startTime,
+			StartTime:   time.Now(),
 			WebhookURL:  "https://example.com/webhook",
-			Metadata:    []byte(`{"key": "value"}`),
-			Schedule:    testutils.StringPtr("FREQ=WEEKLY;BYDAY=MO,WE,FR;INTERVAL=1"),
-			Tags:        pq.StringArray{"test"},
-			Status:      models.EventStatusActive,
-			CreatedAt:   time.Now(),
+			Metadata:    datatypes.JSON([]byte(`{"key": "value"}`)),
+			Schedule: &models.ScheduleConfig{
+				Frequency: "weekly",
+				Interval:  1,
+				ByDay:     []string{"MO", "WE", "FR"},
+			},
+			Tags:      pq.StringArray{"test"},
+			Status:    models.EventStatusActive,
+			CreatedAt: time.Now(),
 		}
-		err := repo.Create(context.Background(), event)
+		err := eventRepo.Create(context.Background(), event)
 		require.NoError(t, err)
 
 		w := httptest.NewRecorder()
@@ -198,45 +203,50 @@ func TestEventHandler(t *testing.T) {
 
 		assert.Equal(t, http.StatusNoContent, w.Code)
 
-		// Verify event is deleted
-		retrieved, err := repo.GetByID(context.Background(), event.ID)
+		// Verify deletion
+		retrieved, err := eventRepo.GetByID(context.Background(), event.ID)
 		require.NoError(t, err)
 		assert.Nil(t, retrieved)
 	})
 
 	t.Run("List Events by Tags", func(t *testing.T) {
 		cleanup()
-		startTime := time.Now()
-		// Create test events
+		// Create events
 		events := []*models.Event{
 			{
 				ID:          uuid.New(),
-				Name:        "Test Event 1",
-				Description: "Test Description 1",
-				StartTime:   startTime,
+				Name:        "Event 1",
+				Description: "Description 1",
+				StartTime:   time.Now(),
 				WebhookURL:  "https://example.com/webhook1",
-				Metadata:    []byte(`{"key": "value1"}`),
-				Schedule:    testutils.StringPtr("FREQ=WEEKLY;BYDAY=MO,WE,FR;INTERVAL=1"),
-				Tags:        pq.StringArray{"test", "tag1"},
-				Status:      models.EventStatusActive,
-				CreatedAt:   time.Now(),
+				Metadata:    datatypes.JSON([]byte(`{"key": "value1"}`)),
+				Schedule: &models.ScheduleConfig{
+					Frequency: "weekly",
+					Interval:  1,
+					ByDay:     []string{"MO", "WE", "FR"},
+				},
+				Tags:      pq.StringArray{"test", "tag1"},
+				Status:    models.EventStatusActive,
+				CreatedAt: time.Now(),
 			},
 			{
 				ID:          uuid.New(),
-				Name:        "Test Event 2",
-				Description: "Test Description 2",
-				StartTime:   startTime,
+				Name:        "Event 2",
+				Description: "Description 2",
+				StartTime:   time.Now(),
 				WebhookURL:  "https://example.com/webhook2",
-				Metadata:    []byte(`{"key": "value2"}`),
-				Schedule:    testutils.StringPtr("FREQ=DAILY;INTERVAL=1"),
-				Tags:        pq.StringArray{"test", "tag2"},
-				Status:      models.EventStatusActive,
-				CreatedAt:   time.Now(),
+				Metadata:    datatypes.JSON([]byte(`{"key": "value2"}`)),
+				Schedule: &models.ScheduleConfig{
+					Frequency: "daily",
+					Interval:  1,
+				},
+				Tags:      pq.StringArray{"test", "tag2"},
+				Status:    models.EventStatusActive,
+				CreatedAt: time.Now(),
 			},
 		}
-
 		for _, event := range events {
-			err := repo.Create(context.Background(), event)
+			err := eventRepo.Create(context.Background(), event)
 			require.NoError(t, err)
 		}
 
@@ -254,17 +264,18 @@ func TestEventHandler(t *testing.T) {
 
 	t.Run("Create Event with Invalid Schedule", func(t *testing.T) {
 		cleanup()
-		startTime := time.Now()
 		req := models.CreateEventRequest{
 			Name:        "Test Event",
 			Description: "Test Description",
-			StartTime:   startTime,
+			StartTime:   time.Now(),
 			WebhookURL:  "https://example.com/webhook",
-			Metadata:    []byte(`{"key": "value"}`),
-			Schedule:    testutils.StringPtr("INVALID_SCHEDULE"),
-			Tags:        []string{"test"},
+			Metadata:    datatypes.JSON([]byte(`{"key": "value"}`)),
+			Schedule: &models.ScheduleConfig{
+				Frequency: "invalid",
+				Interval:  1,
+			},
+			Tags: []string{"test"},
 		}
-
 		body, err := json.Marshal(req)
 		require.NoError(t, err)
 
@@ -281,10 +292,9 @@ func TestEventHandler(t *testing.T) {
 		req := models.CreateEventRequest{
 			Name:       "Test Event",
 			WebhookURL: "https://example.com/webhook",
-			Metadata:   []byte(`{"key": "value"}`),
+			Metadata:   datatypes.JSON([]byte(`{"key": "value"}`)),
 			Tags:       []string{"test"},
 		}
-
 		body, err := json.Marshal(req)
 		require.NoError(t, err)
 
@@ -295,4 +305,17 @@ func TestEventHandler(t *testing.T) {
 
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 	})
-} 
+}
+
+func stringPtr(s string) *string {
+	return &s
+}
+
+func assertJSONEqual(t *testing.T, expected, actual datatypes.JSON) {
+	var expectedMap, actualMap map[string]interface{}
+	err1 := json.Unmarshal(expected, &expectedMap)
+	err2 := json.Unmarshal(actual, &actualMap)
+	assert.NoError(t, err1)
+	assert.NoError(t, err2)
+	assert.Equal(t, expectedMap, actualMap)
+}

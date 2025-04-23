@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -33,7 +34,9 @@ func (r *EventRepository) Create(ctx context.Context, event *models.Event) error
 	now := time.Now()
 	event.ID = uuid.New()
 	event.CreatedAt = now
-	event.UpdatedAt = timePtr(now)
+	if event.UpdatedAt == nil {
+		event.UpdatedAt = timePtr(now)
+	}
 	if event.Status == "" {
 		event.Status = models.EventStatusActive
 	}
@@ -171,6 +174,256 @@ func (r *EventRepository) ListByTags(ctx context.Context, tags []string) ([]*mod
 	err := r.db.SelectContext(ctx, &events, query, pq.Array(tags))
 	if err != nil {
 		return nil, fmt.Errorf("error listing events by tags: %w", err)
+	}
+
+	return events, nil
+}
+
+// DeleteOldEvents deletes events that are older than the specified cutoff time
+func (r *EventRepository) DeleteOldEvents(ctx context.Context, cutoff time.Time) error {
+	query := `
+		DELETE FROM events 
+		WHERE updated_at < $1
+		AND id NOT IN (
+			SELECT event_id 
+			FROM occurrences 
+			WHERE scheduled_at >= $1
+			AND status != $2
+		)
+	`
+	_, err := r.db.ExecContext(ctx, query, cutoff, models.OccurrenceStatusDispatched)
+	return err
+}
+
+// DeleteOldOccurrences deletes occurrences that are older than the specified cutoff time
+func (r *EventRepository) DeleteOldOccurrences(ctx context.Context, cutoff time.Time) error {
+	query := `
+		DELETE FROM occurrences 
+		WHERE scheduled_at < $1
+		AND status IN ($2, $3)
+	`
+	_, err := r.db.ExecContext(ctx, query, cutoff, models.OccurrenceStatusDispatched, models.OccurrenceStatusCompleted)
+	return err
+}
+
+func (r *EventRepository) ListActive(ctx context.Context) ([]*models.Event, error) {
+	query := `
+		SELECT id, name, description, schedule, start_time, metadata, webhook_url, tags, status, created_at, updated_at
+		FROM events
+		WHERE status = $1
+		ORDER BY created_at DESC`
+
+	var events []*models.Event
+	err := r.db.SelectContext(ctx, &events, query, models.EventStatusActive)
+	if err != nil {
+		return nil, fmt.Errorf("error listing active events: %w", err)
+	}
+
+	return events, nil
+}
+
+func (r *EventRepository) CreateOccurrence(ctx context.Context, occurrence *models.Occurrence) error {
+	query := `
+		INSERT INTO occurrences (id, event_id, scheduled_at, status, last_attempt, attempt_count, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		RETURNING id`
+
+	now := time.Now()
+	occurrence.ID = uuid.New()
+	occurrence.CreatedAt = now
+
+	err := r.db.QueryRowContext(ctx, query,
+		occurrence.ID,
+		occurrence.EventID,
+		occurrence.ScheduledAt,
+		occurrence.Status,
+		occurrence.LastAttempt,
+		occurrence.AttemptCount,
+		occurrence.CreatedAt,
+	).Scan(&occurrence.ID)
+
+	if err != nil {
+		return fmt.Errorf("error creating occurrence: %w", err)
+	}
+
+	return nil
+}
+
+func (r *EventRepository) GetOccurrenceByID(ctx context.Context, id uuid.UUID) (*models.Occurrence, error) {
+	query := `
+		SELECT id, event_id, scheduled_at, status, last_attempt, attempt_count, created_at
+		FROM occurrences
+		WHERE id = $1`
+
+	var occurrence models.Occurrence
+	err := r.db.GetContext(ctx, &occurrence, query, id)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("error getting occurrence: %w", err)
+	}
+
+	return &occurrence, nil
+}
+
+func (r *EventRepository) CreateEvent(ctx context.Context, event *models.Event) error {
+	query := `
+		INSERT INTO events (
+			id, name, description, start_time, webhook_url, 
+			metadata, schedule, tags, status, hmac_secret
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+		)
+	`
+
+	var scheduleJSON []byte
+	if event.Schedule != nil {
+		var err error
+		scheduleJSON, err = json.Marshal(event.Schedule)
+		if err != nil {
+			return fmt.Errorf("failed to marshal schedule: %w", err)
+		}
+	}
+
+	_, err := r.db.ExecContext(ctx, query,
+		event.ID,
+		event.Name,
+		event.Description,
+		event.StartTime,
+		event.WebhookURL,
+		event.Metadata,
+		scheduleJSON,
+		pq.Array(event.Tags),
+		event.Status,
+		event.HMACSecret,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create event: %w", err)
+	}
+
+	return nil
+}
+
+func (r *EventRepository) GetEvent(ctx context.Context, id string) (*models.Event, error) {
+	query := `
+		SELECT id, name, description, start_time, webhook_url, 
+			metadata, schedule, tags, status, hmac_secret, created_at, updated_at
+		FROM events
+		WHERE id = $1
+	`
+
+	var event models.Event
+	var scheduleJSON []byte
+	err := r.db.QueryRowContext(ctx, query, id).Scan(
+		&event.ID,
+		&event.Name,
+		&event.Description,
+		&event.StartTime,
+		&event.WebhookURL,
+		&event.Metadata,
+		&scheduleJSON,
+		pq.Array(&event.Tags),
+		&event.Status,
+		&event.HMACSecret,
+		&event.CreatedAt,
+		&event.UpdatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("event not found: %w", err)
+		}
+		return nil, fmt.Errorf("failed to get event: %w", err)
+	}
+
+	if len(scheduleJSON) > 0 {
+		var schedule models.ScheduleConfig
+		if err := json.Unmarshal(scheduleJSON, &schedule); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal schedule: %w", err)
+		}
+		event.Schedule = &schedule
+	}
+
+	return &event, nil
+}
+
+func (r *EventRepository) ListEvents(ctx context.Context, filter models.EventFilter) ([]*models.Event, error) {
+	query := `
+		SELECT id, name, description, start_time, webhook_url, 
+			metadata, schedule, tags, status, hmac_secret, created_at, updated_at
+		FROM events
+		WHERE 1=1
+	`
+	args := []interface{}{}
+	argCount := 1
+
+	if filter.Status != "" {
+		query += fmt.Sprintf(" AND status = $%d", argCount)
+		args = append(args, filter.Status)
+		argCount++
+	}
+
+	if len(filter.Tags) > 0 {
+		query += fmt.Sprintf(" AND tags && $%d", argCount)
+		args = append(args, pq.Array(filter.Tags))
+		argCount++
+	}
+
+	if filter.StartTimeBefore != nil {
+		query += fmt.Sprintf(" AND start_time <= $%d", argCount)
+		args = append(args, filter.StartTimeBefore)
+		argCount++
+	}
+
+	if filter.StartTimeAfter != nil {
+		query += fmt.Sprintf(" AND start_time >= $%d", argCount)
+		args = append(args, filter.StartTimeAfter)
+		argCount++
+	}
+
+	query += " ORDER BY created_at DESC"
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query events: %w", err)
+	}
+	defer rows.Close()
+
+	var events []*models.Event
+	for rows.Next() {
+		var event models.Event
+		var scheduleJSON []byte
+		err := rows.Scan(
+			&event.ID,
+			&event.Name,
+			&event.Description,
+			&event.StartTime,
+			&event.WebhookURL,
+			&event.Metadata,
+			&scheduleJSON,
+			pq.Array(&event.Tags),
+			&event.Status,
+			&event.HMACSecret,
+			&event.CreatedAt,
+			&event.UpdatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan event: %w", err)
+		}
+
+		if len(scheduleJSON) > 0 {
+			var schedule models.ScheduleConfig
+			if err := json.Unmarshal(scheduleJSON, &schedule); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal schedule: %w", err)
+			}
+			event.Schedule = &schedule
+		}
+
+		events = append(events, &event)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating events: %w", err)
 	}
 
 	return events, nil

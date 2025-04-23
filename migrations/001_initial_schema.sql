@@ -44,7 +44,7 @@ CREATE TABLE events (
     start_time TIMESTAMP WITH TIME ZONE NOT NULL,
     webhook_url TEXT NOT NULL,
     metadata JSONB NOT NULL DEFAULT '{}',
-    schedule TEXT,
+    schedule JSONB,
     tags TEXT[] NOT NULL DEFAULT '{}',
     status TEXT NOT NULL DEFAULT 'active',
     hmac_secret TEXT,
@@ -55,7 +55,7 @@ CREATE TABLE events (
 -- Add comments to events table
 COMMENT ON COLUMN events.name IS 'Event name';
 COMMENT ON COLUMN events.description IS 'Event description';
-COMMENT ON COLUMN events.schedule IS 'iCalendar (RFC 5545) recurrence rule';
+COMMENT ON COLUMN events.schedule IS 'JSON schedule format with frequency, interval, and optional constraints';
 COMMENT ON COLUMN events.metadata IS 'Event metadata in JSONB format';
 COMMENT ON COLUMN events.hmac_secret IS 'Custom HMAC secret for webhook signing. If null, uses default secret.';
 
@@ -172,7 +172,7 @@ CREATE TABLE archived_events (
     start_time TIMESTAMPTZ NOT NULL,
     webhook_url TEXT NOT NULL,
     metadata JSONB NOT NULL,
-    schedule TEXT,
+    schedule JSONB,
     tags TEXT[],
     status TEXT,
     created_at TIMESTAMPTZ,
@@ -216,7 +216,7 @@ CREATE TABLE archived_webhook_attempts (
 CREATE INDEX idx_events_status ON events(status);
 CREATE INDEX idx_events_tags ON events USING GIN(tags);
 CREATE INDEX idx_events_created_at ON events(created_at);
-CREATE INDEX idx_events_schedule ON events(schedule);
+CREATE INDEX idx_events_schedule ON events USING GIN(schedule);
 CREATE INDEX idx_events_metadata ON events USING GIN(metadata);
 
 -- Occurrences indexes

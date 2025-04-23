@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"net/http"
 	"time"
 
@@ -13,101 +14,164 @@ import (
 	"github.com/feedloop/qhronos/internal/services"
 )
 
-const (
-	maxRetries = 3
-	retryDelay = 5 * time.Minute
-)
-
 type Dispatcher struct {
-	client      *http.Client
-	eventRepo   *repository.EventRepository
-	repo        *repository.OccurrenceRepository
-	hmacService *services.HMACService
+	eventRepo      *repository.EventRepository
+	occurrenceRepo *repository.OccurrenceRepository
+	hmacService    *services.HMACService
+	client         HTTPClient
+	maxRetries     int
+	retryDelay     time.Duration
 }
 
-func NewDispatcher(eventRepo *repository.EventRepository, repo *repository.OccurrenceRepository, hmacService *services.HMACService) *Dispatcher {
+// HTTPClient interface for mocking HTTP requests
+type HTTPClient interface {
+	Do(req *http.Request) (*http.Response, error)
+}
+
+// DefaultHTTPClient implements HTTPClient using http.Client
+type DefaultHTTPClient struct {
+	client *http.Client
+}
+
+func (d *DefaultHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	return d.client.Do(req)
+}
+
+func NewDispatcher(eventRepo *repository.EventRepository, occurrenceRepo *repository.OccurrenceRepository, hmacService *services.HMACService) *Dispatcher {
 	return &Dispatcher{
-		client: &http.Client{
-			Timeout: 30 * time.Second,
-		},
-		eventRepo:   eventRepo,
-		repo:        repo,
-		hmacService: hmacService,
+		eventRepo:      eventRepo,
+		occurrenceRepo: occurrenceRepo,
+		hmacService:    hmacService,
+		client:         &DefaultHTTPClient{client: &http.Client{Timeout: 10 * time.Second}},
+		maxRetries:     3,
+		retryDelay:     5 * time.Second,
 	}
+}
+
+// SetHTTPClient allows setting a custom HTTP client (used for testing)
+func (d *Dispatcher) SetHTTPClient(client HTTPClient) {
+	d.client = client
+}
+
+// retryWithBackoff executes a function with retries and backoff
+func (d *Dispatcher) retryWithBackoff(ctx context.Context, operation func() error) error {
+	var lastErr error
+	for attempt := 0; attempt <= d.maxRetries; attempt++ {
+		err := operation()
+		if err == nil {
+			return nil
+		}
+
+		lastErr = err
+		if attempt == d.maxRetries {
+			return lastErr
+		}
+
+		time.Sleep(d.retryDelay)
+	}
+	return lastErr
 }
 
 // DispatchWebhook sends a webhook request and handles retries
 func (d *Dispatcher) DispatchWebhook(ctx context.Context, occurrence *models.Occurrence, event *models.Event) error {
-	// Create request body
-	body := map[string]interface{}{
-		"event_id":     event.ID,
+	// Verify event exists in database
+	dbEvent, err := d.eventRepo.GetByID(ctx, event.ID)
+	if err != nil {
+		return fmt.Errorf("error getting event: %w", err)
+	}
+	if dbEvent == nil {
+		return fmt.Errorf("event not found")
+	}
+
+	// Prepare webhook payload with rich information
+	payload := map[string]interface{}{
+		"event_id":      event.ID,
 		"occurrence_id": occurrence.ID,
-		"scheduled_at": occurrence.ScheduledAt,
-		"metadata":     event.Metadata,
+		"name":          event.Name,
+		"description":   event.Description,
+		"scheduled_at":  occurrence.ScheduledAt,
+		"metadata":      event.Metadata,
 	}
 
-	jsonBody, err := json.Marshal(body)
+	// Convert payload to JSON
+	jsonPayload, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("failed to marshal webhook body: %w", err)
+		return fmt.Errorf("error marshaling payload: %w", err)
 	}
 
-	// Create request
-	req, err := http.NewRequestWithContext(ctx, "POST", event.WebhookURL, bytes.NewBuffer(jsonBody))
+	// Create base request (will be cloned for each attempt)
+	baseReq, err := http.NewRequestWithContext(ctx, "POST", event.WebhookURL, nil)
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		return fmt.Errorf("error creating request: %w", err)
 	}
 
-	req.Header.Set("Content-Type", "application/json")
+	// Set headers
+	baseReq.Header.Set("Content-Type", "application/json")
+	baseReq.Header.Set("Content-Length", fmt.Sprintf("%d", len(jsonPayload)))
 
-	// Sign the request
-	var secret string
-	if event.HMACSecret != nil {
-		secret = *event.HMACSecret
-	}
-	signature := d.hmacService.SignPayload(jsonBody, secret)
-	req.Header.Set("X-Qhronos-Signature", signature)
-
-	// Send request
-	resp, err := d.client.Do(req)
-	if err != nil {
-		return d.handleError(ctx, occurrence, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return d.handleSuccess(ctx, occurrence)
+	// Sign request if HMAC is enabled
+	if d.hmacService != nil {
+		var secret string
+		if event.HMACSecret != nil {
+			secret = *event.HMACSecret
+		}
+		signature := d.hmacService.SignPayload(jsonPayload, secret)
+		baseReq.Header.Set("X-Qhronos-Signature", signature)
 	}
 
-	return d.handleError(ctx, occurrence, fmt.Errorf("webhook returned status %d", resp.StatusCode))
-}
+	// Execute webhook request with retries
+	err = d.retryWithBackoff(ctx, func() error {
+		// Clone the base request and set the body for this attempt
+		req := baseReq.Clone(ctx)
+		req.Body = ioutil.NopCloser(bytes.NewBuffer(jsonPayload))
 
-// handleSuccess updates the occurrence status to dispatched
-func (d *Dispatcher) handleSuccess(ctx context.Context, occurrence *models.Occurrence) error {
-	return d.repo.UpdateStatus(ctx, occurrence.ID, models.OccurrenceStatusDispatched)
-}
-
-// handleError handles webhook delivery errors and retries
-func (d *Dispatcher) handleError(ctx context.Context, occurrence *models.Occurrence, err error) error {
-	// Update attempt count
-	occurrence.AttemptCount++
-	now := time.Now()
-	occurrence.LastAttempt = &now
-
-	// Check if we should retry
-	if occurrence.AttemptCount < maxRetries {
-		// Update status to pending for retry
-		if err := d.repo.UpdateStatus(ctx, occurrence.ID, models.OccurrenceStatusPending); err != nil {
-			return fmt.Errorf("failed to update occurrence status: %w", err)
+		resp, err := d.client.Do(req)
+		if err != nil {
+			// Update status to failed but continue retrying
+			updateErr := d.occurrenceRepo.UpdateStatus(ctx, occurrence.ID, models.OccurrenceStatusFailed)
+			if updateErr != nil {
+				return fmt.Errorf("error updating occurrence status: %w (original error: %v)", updateErr, err)
+			}
+			return fmt.Errorf("webhook request failed: %w", err)
 		}
 
-		// Schedule retry
-		occurrence.ScheduledAt = time.Now().Add(retryDelay)
-		return nil
-	}
+		// Handle nil response
+		if resp == nil {
+			// Update status to failed but continue retrying
+			updateErr := d.occurrenceRepo.UpdateStatus(ctx, occurrence.ID, models.OccurrenceStatusFailed)
+			if updateErr != nil {
+				return fmt.Errorf("error updating occurrence status: %w", updateErr)
+			}
+			return fmt.Errorf("empty response from server")
+		}
 
-	// Max retries reached, mark as failed
-	return d.repo.UpdateStatus(ctx, occurrence.ID, models.OccurrenceStatusFailed)
+		// Ensure response body is closed
+		defer func() {
+			if resp.Body != nil {
+				resp.Body.Close()
+			}
+		}()
+
+		// Check response status
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			// Update occurrence status to completed
+			updateErr := d.occurrenceRepo.UpdateStatus(ctx, occurrence.ID, models.OccurrenceStatusCompleted)
+			if updateErr != nil {
+				return fmt.Errorf("error updating occurrence status: %w", updateErr)
+			}
+			return nil
+		}
+
+		// Non-2xx status code
+		// Update status to failed but continue retrying
+		updateErr := d.occurrenceRepo.UpdateStatus(ctx, occurrence.ID, models.OccurrenceStatusFailed)
+		if updateErr != nil {
+			return fmt.Errorf("error updating occurrence status: %w", updateErr)
+		}
+		return fmt.Errorf("received non-2xx status code: %d", resp.StatusCode)
+	})
+
+	return err
 }
 
 // Run processes due events and dispatches webhooks
@@ -120,19 +184,22 @@ func (d *Dispatcher) Run(ctx context.Context, scheduler *Scheduler) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			// Get due events
-			occurrences, err := scheduler.GetDueEvents(ctx, 100)
+			// Get due occurrences
+			occurrences, err := scheduler.GetDueOccurrence(ctx)
 			if err != nil {
-				fmt.Printf("Error getting due events: %v\n", err)
+				fmt.Printf("Error getting due occurrences: %v\n", err)
 				continue
 			}
 
 			// Process each occurrence
 			for _, occurrence := range occurrences {
-				// Get the associated event
 				event, err := d.eventRepo.GetByID(ctx, occurrence.EventID)
 				if err != nil {
-					fmt.Printf("Error getting event %s: %v\n", occurrence.EventID, err)
+					fmt.Printf("Error getting event for occurrence %s: %v\n", occurrence.ID, err)
+					continue
+				}
+				if event == nil {
+					fmt.Printf("Event not found for occurrence %s\n", occurrence.ID)
 					continue
 				}
 
@@ -141,12 +208,11 @@ func (d *Dispatcher) Run(ctx context.Context, scheduler *Scheduler) error {
 					fmt.Printf("Error dispatching webhook for occurrence %s: %v\n", occurrence.ID, err)
 					continue
 				}
-
-				// Remove from scheduler
-				if err := scheduler.RemoveScheduledEvent(ctx, occurrence); err != nil {
-					fmt.Printf("Error removing scheduled event %s: %v\n", occurrence.ID, err)
-				}
 			}
 		}
 	}
-} 
+}
+
+func timePtr(t time.Time) *time.Time {
+	return &t
+}

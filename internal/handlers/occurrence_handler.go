@@ -4,10 +4,10 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	"github.com/feedloop/qhronos/internal/models"
 	"github.com/feedloop/qhronos/internal/repository"
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 type OccurrenceHandler struct {
@@ -72,6 +72,10 @@ func (h *OccurrenceHandler) ListOccurrencesByTags(c *gin.Context) {
 		return
 	}
 
+	if occurrences == nil {
+		occurrences = []models.Occurrence{}
+	}
+
 	response := models.PaginatedResponse{
 		Data: occurrences,
 		Pagination: struct {
@@ -113,4 +117,4 @@ func (h *OccurrenceHandler) ListOccurrencesByEvent(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, occurrences)
-} 
+}

@@ -9,11 +9,13 @@ import (
 )
 
 type Config struct {
-	Server   ServerConfig   `mapstructure:"server"`
-	Database DatabaseConfig `mapstructure:"database"`
-	Redis    RedisConfig    `mapstructure:"redis"`
-	Auth     AuthConfig     `mapstructure:"auth"`
-	HMAC     HMACConfig     `mapstructure:"hmac"`
+	Server    ServerConfig    `mapstructure:"server"`
+	Database  DatabaseConfig  `mapstructure:"database"`
+	Redis     RedisConfig     `mapstructure:"redis"`
+	Auth      AuthConfig      `mapstructure:"auth"`
+	HMAC      HMACConfig      `mapstructure:"hmac"`
+	Scheduler SchedulerConfig `mapstructure:"scheduler"`
+	Retention RetentionConfig `mapstructure:"retention"`
 }
 
 type ServerConfig struct {
@@ -46,6 +48,17 @@ type HMACConfig struct {
 	DefaultSecret string `mapstructure:"default_secret"`
 }
 
+type SchedulerConfig struct {
+	LookAheadDuration time.Duration `mapstructure:"look_ahead_duration"`
+	ExpansionInterval time.Duration `mapstructure:"expansion_interval"`
+}
+
+type RetentionConfig struct {
+	Events     time.Duration `mapstructure:"events"`
+	Occurrences time.Duration `mapstructure:"occurrences"`
+	CleanupInterval time.Duration `mapstructure:"cleanup_interval"`
+}
+
 func Load() (*Config, error) {
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
@@ -66,6 +79,11 @@ func Load() (*Config, error) {
 	viper.SetDefault("redis.password", "")
 	viper.SetDefault("redis.db", 0)
 	viper.SetDefault("hmac.default_secret", "qhronos.io")
+	viper.SetDefault("scheduler.look_ahead_duration", "24h")
+	viper.SetDefault("scheduler.expansion_interval", "5m")
+	viper.SetDefault("retention.events", "30d")
+	viper.SetDefault("retention.occurrences", "7d")
+	viper.SetDefault("retention.cleanup_interval", "1h")
 
 	// Read environment variables
 	viper.AutomaticEnv()

@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/feedloop/qhronos/internal/models"
-	"github.com/redis/go-redis/v9"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 )
 
 const (
@@ -35,9 +35,11 @@ func (s *Scheduler) ScheduleEvent(ctx context.Context, occurrence *models.Occurr
 	}
 
 	// Add to Redis sorted set with scheduled_at as score
+	// Use millisecond precision for the score to avoid collisions
+	score := float64(occurrence.ScheduledAt.UnixMilli())
 	_, err = s.redis.ZAdd(ctx, scheduleKey, redis.Z{
-		Score:  float64(occurrence.ScheduledAt.Unix()),
-		Member: data,
+		Score:  score,
+		Member: string(data),
 	}).Result()
 
 	return err
@@ -60,29 +62,31 @@ func (s *Scheduler) ScheduleRecurringEvent(ctx context.Context, event *models.Ev
 	return err
 }
 
-// GetDueEvents retrieves events that are due for execution
-func (s *Scheduler) GetDueEvents(ctx context.Context, batchSize int64) ([]*models.Occurrence, error) {
-	now := time.Now().Unix()
+// GetDueOccurrence retrieves occurrences that are due for execution
+func (s *Scheduler) GetDueOccurrence(ctx context.Context) ([]*models.Occurrence, error) {
+	now := time.Now().UnixMilli()
 
-	// Get events due before now
+	// Get all occurrences due up to now
 	results, err := s.redis.ZRangeByScore(ctx, scheduleKey, &redis.ZRangeBy{
-		Min:    "0",
-		Max:    fmt.Sprintf("%d", now),
-		Offset: 0,
-		Count:  batchSize,
+		Min: "0",
+		Max: fmt.Sprintf("%d", now),
 	}).Result()
-
 	if err != nil {
-		return nil, fmt.Errorf("failed to get due events: %w", err)
+		return nil, fmt.Errorf("failed to get due occurrences from Redis: %w", err)
 	}
 
 	var occurrences []*models.Occurrence
 	for _, result := range results {
-		var occurrence models.Occurrence
-		if err := json.Unmarshal([]byte(result), &occurrence); err != nil {
+		var occ models.Occurrence
+		if err := json.Unmarshal([]byte(result), &occ); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal occurrence: %w", err)
 		}
-		occurrences = append(occurrences, &occurrence)
+		occurrences = append(occurrences, &occ)
+
+		// Remove the current occurrence
+		if err := s.redis.ZRem(ctx, scheduleKey, result).Err(); err != nil {
+			return nil, fmt.Errorf("failed to remove processed occurrence: %w", err)
+		}
 	}
 
 	return occurrences, nil
@@ -122,4 +126,84 @@ func (s *Scheduler) GetRecurringEvents(ctx context.Context) ([]*models.Event, er
 func (s *Scheduler) RemoveRecurringEvent(ctx context.Context, eventID uuid.UUID) error {
 	_, err := s.redis.HDel(ctx, recurringKey, eventID.String()).Result()
 	return err
-} 
+}
+
+func (s *Scheduler) AddEvent(ctx context.Context, event *models.Event) error {
+	if event.Schedule == nil {
+		return fmt.Errorf("event has no schedule")
+	}
+
+	// Convert event to JSON
+	eventJSON, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("failed to marshal event: %w", err)
+	}
+
+	// Calculate next occurrence time
+	nextTime, err := s.calculateNextOccurrence(event)
+	if err != nil {
+		return fmt.Errorf("failed to calculate next occurrence: %w", err)
+	}
+
+	// If no next occurrence, the event is complete
+	if nextTime == nil {
+		return nil
+	}
+
+	// Store event in Redis sorted set with score as Unix timestamp
+	score := float64(nextTime.Unix())
+	err = s.redis.ZAdd(ctx, scheduleKey, redis.Z{
+		Score:  score,
+		Member: string(eventJSON),
+	}).Err()
+	if err != nil {
+		return fmt.Errorf("failed to add event to Redis: %w", err)
+	}
+
+	return nil
+}
+
+// calculateNextOccurrence calculates the next occurrence time for an event based on its schedule
+func (s *Scheduler) calculateNextOccurrence(event *models.Event) (*time.Time, error) {
+	schedule := event.Schedule
+	now := time.Now().UTC()
+
+	// Handle different frequencies
+	var nextTime time.Time
+	switch schedule.Frequency {
+	case "daily":
+		nextTime = event.StartTime.AddDate(0, 0, schedule.Interval)
+	case "weekly":
+		nextTime = event.StartTime.AddDate(0, 0, 7*schedule.Interval)
+	case "monthly":
+		nextTime = event.StartTime.AddDate(0, schedule.Interval, 0)
+	case "yearly":
+		nextTime = event.StartTime.AddDate(schedule.Interval, 0, 0)
+	default:
+		return nil, fmt.Errorf("invalid frequency: %s", schedule.Frequency)
+	}
+
+	// Check if we've exceeded count
+	if schedule.Count != nil {
+		// TODO: Implement count check
+		return nil, nil
+	}
+
+	// Check if we've exceeded until date
+	if schedule.Until != nil {
+		untilTime, err := time.Parse(time.RFC3339, *schedule.Until)
+		if err != nil {
+			return nil, fmt.Errorf("invalid until date: %w", err)
+		}
+		if nextTime.After(untilTime) {
+			return nil, nil
+		}
+	}
+
+	// Check if the next occurrence is in the past
+	if nextTime.Before(now) {
+		return nil, nil
+	}
+
+	return &nextTime, nil
+}

@@ -3,11 +3,12 @@ package handlers
 import (
 	"net/http"
 	"strings"
+	"time"
 
-	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	"github.com/feedloop/qhronos/internal/models"
 	"github.com/feedloop/qhronos/internal/repository"
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/lib/pq"
 )
 
@@ -39,13 +40,13 @@ func (h *EventHandler) CreateEvent(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "start_time is required"})
 		return
 	}
-	if len(req.Metadata) == 0 {
+	if req.Metadata == nil || len(req.Metadata) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "metadata is required"})
 		return
 	}
 
 	// Validate schedule format if provided
-	if req.Schedule != nil && !isValidSchedule(*req.Schedule) {
+	if req.Schedule != nil && !isValidSchedule(req.Schedule) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid schedule format"})
 		return
 	}
@@ -127,7 +128,7 @@ func (h *EventHandler) UpdateEvent(c *gin.Context) {
 		event.Metadata = req.Metadata
 	}
 	if req.Schedule != nil {
-		if !isValidSchedule(*req.Schedule) {
+		if !isValidSchedule(req.Schedule) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid schedule format"})
 			return
 		}
@@ -184,26 +185,67 @@ func (h *EventHandler) ListEventsByTags(c *gin.Context) {
 	c.JSON(http.StatusOK, events)
 }
 
-func isValidSchedule(schedule string) bool {
-	// Basic validation: check if the schedule string contains required parts
-	parts := strings.Split(schedule, ";")
-	if len(parts) < 1 {
+func isValidSchedule(schedule *models.ScheduleConfig) bool {
+	if schedule == nil {
 		return false
 	}
 
-	hasFreq := false
-	for _, part := range parts {
-		if strings.HasPrefix(part, "FREQ=") {
-			hasFreq = true
-			freq := strings.TrimPrefix(part, "FREQ=")
-			switch freq {
-			case "YEARLY", "MONTHLY", "WEEKLY", "DAILY", "HOURLY", "MINUTELY", "SECONDLY":
-				continue
-			default:
+	// Validate frequency
+	switch schedule.Frequency {
+	case "daily", "weekly", "monthly", "yearly":
+		// Valid frequency
+	default:
+		return false
+	}
+
+	// Validate interval
+	if schedule.Interval < 1 {
+		return false
+	}
+
+	// Validate by_day for weekly frequency
+	if schedule.Frequency == "weekly" && len(schedule.ByDay) > 0 {
+		validDays := map[string]bool{
+			"MO": true, "TU": true, "WE": true,
+			"TH": true, "FR": true, "SA": true, "SU": true,
+		}
+		for _, day := range schedule.ByDay {
+			if !validDays[day] {
 				return false
 			}
 		}
 	}
 
-	return hasFreq
-} 
+	// Validate by_month_day for monthly frequency
+	if schedule.Frequency == "monthly" && len(schedule.ByMonthDay) > 0 {
+		for _, day := range schedule.ByMonthDay {
+			if day < 1 || day > 31 {
+				return false
+			}
+		}
+	}
+
+	// Validate by_month for yearly frequency
+	if schedule.Frequency == "yearly" && len(schedule.ByMonth) > 0 {
+		for _, month := range schedule.ByMonth {
+			if month < 1 || month > 12 {
+				return false
+			}
+		}
+	}
+
+	// Validate count if provided
+	if schedule.Count != nil && *schedule.Count < 1 {
+		return false
+	}
+
+	// Validate until if provided
+	if schedule.Until != nil {
+		_, err := time.Parse(time.RFC3339, *schedule.Until)
+		if err != nil {
+			return false
+		}
+	}
+
+	return true
+}

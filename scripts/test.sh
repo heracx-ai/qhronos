@@ -3,6 +3,9 @@
 # Exit on error
 set -e
 
+# Print commands
+set -x
+
 # Start PostgreSQL and Redis containers
 docker-compose up -d postgres redis
 
@@ -28,8 +31,7 @@ echo "Running migrations..."
 cat migrations/001_initial_schema.sql | docker exec -i qhronos_db psql -U postgres -d qhronos_test
 
 # Run tests
-echo "Running tests..."
-go test -v ./...
+go test -v -race ./...
 
 # Clean up
 echo "Cleaning up..."

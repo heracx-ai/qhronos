@@ -13,8 +13,10 @@ import (
 	"github.com/feedloop/qhronos/internal/testutils"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/datatypes"
 )
 
 func TestOccurrenceHandler(t *testing.T) {
@@ -23,12 +25,9 @@ func TestOccurrenceHandler(t *testing.T) {
 	occurrenceRepo := repository.NewOccurrenceRepository(db)
 	handler := NewOccurrenceHandler(eventRepo, occurrenceRepo)
 
-	// Add cleanup function
 	cleanup := func() {
 		ctx := context.Background()
-		_, err := db.ExecContext(ctx, "TRUNCATE TABLE occurrences CASCADE")
-		require.NoError(t, err)
-		_, err = db.ExecContext(ctx, "TRUNCATE TABLE events CASCADE")
+		_, err := db.ExecContext(ctx, "TRUNCATE TABLE events, occurrences CASCADE")
 		require.NoError(t, err)
 	}
 
@@ -36,6 +35,149 @@ func TestOccurrenceHandler(t *testing.T) {
 	router.GET("/occurrences/:id", handler.GetOccurrence)
 	router.GET("/events/:id/occurrences", handler.ListOccurrencesByEvent)
 	router.GET("/occurrences", handler.ListOccurrencesByTags)
+
+	t.Run("List Occurrences", func(t *testing.T) {
+		cleanup()
+		event := &models.Event{
+			ID:          uuid.New(),
+			Name:        "Test Event",
+			Description: "Test Description",
+			StartTime:   time.Now(),
+			WebhookURL:  "https://example.com/webhook",
+			Metadata:    datatypes.JSON([]byte(`{"key": "value"}`)),
+			Schedule: &models.ScheduleConfig{
+				Frequency: "weekly",
+				Interval:  1,
+				ByDay:     []string{"MO", "WE", "FR"},
+			},
+			Tags:      pq.StringArray{"test"},
+			Status:    models.EventStatusActive,
+			CreatedAt: time.Now(),
+		}
+
+		err := eventRepo.Create(context.Background(), event)
+		require.NoError(t, err)
+
+		occurrences := []*models.Occurrence{
+			{
+				ID:           uuid.New(),
+				EventID:      event.ID,
+				ScheduledAt:  time.Now(),
+				Status:       models.OccurrenceStatusPending,
+				LastAttempt:  nil,
+				AttemptCount: 0,
+				CreatedAt:    time.Now(),
+			},
+			{
+				ID:           uuid.New(),
+				EventID:      event.ID,
+				ScheduledAt:  time.Now().Add(time.Hour),
+				Status:       models.OccurrenceStatusPending,
+				LastAttempt:  nil,
+				AttemptCount: 0,
+				CreatedAt:    time.Now(),
+			},
+		}
+
+		for _, occ := range occurrences {
+			err := occurrenceRepo.Create(context.Background(), occ)
+			require.NoError(t, err)
+		}
+
+		// List all occurrences
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", "/occurrences?tags=test", nil)
+		router.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusOK, w.Code)
+		var paginatedResp models.PaginatedResponse
+		err = json.Unmarshal(w.Body.Bytes(), &paginatedResp)
+		require.NoError(t, err)
+		data, ok := paginatedResp.Data.([]interface{})
+		require.True(t, ok)
+		assert.Len(t, data, 2)
+	})
+
+	t.Run("List Occurrences by Event ID", func(t *testing.T) {
+		cleanup()
+		events := []*models.Event{
+			{
+				ID:          uuid.New(),
+				Name:        "Event 1",
+				Description: "Description 1",
+				StartTime:   time.Now(),
+				WebhookURL:  "https://example.com/webhook1",
+				Metadata:    datatypes.JSON([]byte(`{"key": "value1"}`)),
+				Schedule: &models.ScheduleConfig{
+					Frequency: "weekly",
+					Interval:  1,
+					ByDay:     []string{"MO", "WE", "FR"},
+				},
+				Tags:      pq.StringArray{"test1"},
+				Status:    models.EventStatusActive,
+				CreatedAt: time.Now(),
+			},
+			{
+				ID:          uuid.New(),
+				Name:        "Event 2",
+				Description: "Description 2",
+				StartTime:   time.Now(),
+				WebhookURL:  "https://example.com/webhook2",
+				Metadata:    datatypes.JSON([]byte(`{"key": "value2"}`)),
+				Schedule: &models.ScheduleConfig{
+					Frequency: "weekly",
+					Interval:  1,
+					ByDay:     []string{"TU", "TH"},
+				},
+				Tags:      pq.StringArray{"test2"},
+				Status:    models.EventStatusActive,
+				CreatedAt: time.Now(),
+			},
+		}
+
+		for _, event := range events {
+			err := eventRepo.Create(context.Background(), event)
+			require.NoError(t, err)
+
+			occurrences := []*models.Occurrence{
+				{
+					ID:           uuid.New(),
+					EventID:      event.ID,
+					ScheduledAt:  time.Now(),
+					Status:       models.OccurrenceStatusPending,
+					LastAttempt:  nil,
+					AttemptCount: 0,
+					CreatedAt:    time.Now(),
+				},
+				{
+					ID:           uuid.New(),
+					EventID:      event.ID,
+					ScheduledAt:  time.Now().Add(time.Hour),
+					Status:       models.OccurrenceStatusPending,
+					LastAttempt:  nil,
+					AttemptCount: 0,
+					CreatedAt:    time.Now(),
+				},
+			}
+
+			for _, occ := range occurrences {
+				err := occurrenceRepo.Create(context.Background(), occ)
+				require.NoError(t, err)
+			}
+		}
+
+		// List occurrences for Event 1
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", "/events/"+events[0].ID.String()+"/occurrences", nil)
+		router.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusOK, w.Code)
+		var response []*models.Occurrence
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.Len(t, response, 2)
+		for _, occ := range response {
+			assert.Equal(t, events[0].ID, occ.EventID)
+		}
+	})
 
 	t.Run("Get Occurrence", func(t *testing.T) {
 		cleanup()
@@ -46,22 +188,28 @@ func TestOccurrenceHandler(t *testing.T) {
 			Description: "Test Description",
 			StartTime:   time.Now(),
 			WebhookURL:  "https://example.com/webhook",
-			Metadata:    []byte(`{"key": "value"}`),
-			Schedule:    testutils.StringPtr("FREQ=WEEKLY;BYDAY=MO,WE,FR;INTERVAL=1"),
-			Tags:        []string{"test"},
-			Status:      models.EventStatusActive,
-			CreatedAt:   time.Now(),
+			Metadata:    datatypes.JSON([]byte(`{"key": "value"}`)),
+			Schedule: &models.ScheduleConfig{
+				Frequency: "weekly",
+				Interval:  1,
+				ByDay:     []string{"MO", "WE", "FR"},
+			},
+			Tags:      pq.StringArray{"test"},
+			Status:    models.EventStatusActive,
+			CreatedAt: time.Now(),
 		}
 		err := eventRepo.Create(context.Background(), event)
 		require.NoError(t, err)
 
 		// Create occurrence
 		occurrence := &models.Occurrence{
-			ID:          uuid.New(),
-			EventID:     event.ID,
-			ScheduledAt: time.Now(),
-			Status:      models.OccurrenceStatusPending,
-			CreatedAt:   time.Now(),
+			ID:           uuid.New(),
+			EventID:      event.ID,
+			ScheduledAt:  time.Now(),
+			Status:       models.OccurrenceStatusPending,
+			LastAttempt:  nil,
+			AttemptCount: 0,
+			CreatedAt:    time.Now(),
 		}
 		err = occurrenceRepo.Create(context.Background(), occurrence)
 		require.NoError(t, err)
@@ -90,11 +238,15 @@ func TestOccurrenceHandler(t *testing.T) {
 				Description: "Description 1",
 				StartTime:   time.Now(),
 				WebhookURL:  "https://example.com/webhook1",
-				Metadata:    []byte(`{"key": "value1"}`),
-				Schedule:    testutils.StringPtr("FREQ=WEEKLY;BYDAY=MO,WE,FR;INTERVAL=1"),
-				Tags:        []string{"test1"},
-				Status:      models.EventStatusActive,
-				CreatedAt:   time.Now(),
+				Metadata:    datatypes.JSON([]byte(`{"key": "value1"}`)),
+				Schedule: &models.ScheduleConfig{
+					Frequency: "weekly",
+					Interval:  1,
+					ByDay:     []string{"MO", "WE", "FR"},
+				},
+				Tags:      pq.StringArray{"test1"},
+				Status:    models.EventStatusActive,
+				CreatedAt: time.Now(),
 			},
 			{
 				ID:          uuid.New(),
@@ -102,11 +254,15 @@ func TestOccurrenceHandler(t *testing.T) {
 				Description: "Description 2",
 				StartTime:   time.Now(),
 				WebhookURL:  "https://example.com/webhook2",
-				Metadata:    []byte(`{"key": "value2"}`),
-				Schedule:    testutils.StringPtr("FREQ=WEEKLY;BYDAY=TU,TH;INTERVAL=1"),
-				Tags:        []string{"test2"},
-				Status:      models.EventStatusActive,
-				CreatedAt:   time.Now(),
+				Metadata:    datatypes.JSON([]byte(`{"key": "value2"}`)),
+				Schedule: &models.ScheduleConfig{
+					Frequency: "weekly",
+					Interval:  1,
+					ByDay:     []string{"TU", "TH"},
+				},
+				Tags:      pq.StringArray{"test2"},
+				Status:    models.EventStatusActive,
+				CreatedAt: time.Now(),
 			},
 		}
 
@@ -118,18 +274,22 @@ func TestOccurrenceHandler(t *testing.T) {
 		// Create test occurrences
 		occurrences := []*models.Occurrence{
 			{
-				ID:          uuid.New(),
-				EventID:     events[0].ID,
-				ScheduledAt: time.Now(),
-				Status:      models.OccurrenceStatusPending,
-				CreatedAt:   time.Now(),
+				ID:           uuid.New(),
+				EventID:      events[0].ID,
+				ScheduledAt:  time.Now(),
+				Status:       models.OccurrenceStatusPending,
+				LastAttempt:  nil,
+				AttemptCount: 0,
+				CreatedAt:    time.Now(),
 			},
 			{
-				ID:          uuid.New(),
-				EventID:     events[0].ID,
-				ScheduledAt: time.Now().Add(time.Hour),
-				Status:      models.OccurrenceStatusPending,
-				CreatedAt:   time.Now(),
+				ID:           uuid.New(),
+				EventID:      events[0].ID,
+				ScheduledAt:  time.Now().Add(time.Hour),
+				Status:       models.OccurrenceStatusPending,
+				LastAttempt:  nil,
+				AttemptCount: 0,
+				CreatedAt:    time.Now(),
 			},
 		}
 
@@ -169,7 +329,3 @@ func TestOccurrenceHandler(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 	})
 }
-
-func stringPtr(s string) *string {
-	return &s
-} 
