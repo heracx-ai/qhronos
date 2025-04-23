@@ -17,19 +17,23 @@ const (
 )
 
 type Occurrence struct {
-	ID           uuid.UUID        `json:"id" db:"id"`
+	ID           int              `json:"id" db:"id"`
+	OccurrenceID uuid.UUID        `json:"occurrence_id" db:"occurrence_id"`
 	EventID      uuid.UUID        `json:"event_id" db:"event_id"`
 	ScheduledAt  time.Time        `json:"scheduled_at" db:"scheduled_at"`
 	Status       OccurrenceStatus `json:"status" db:"status"`
-	LastAttempt  *time.Time       `json:"last_attempt,omitempty" db:"last_attempt"`
 	AttemptCount int              `json:"attempt_count" db:"attempt_count"`
-	CreatedAt    time.Time        `json:"created_at" db:"created_at"`
-	UpdatedAt    *time.Time       `json:"updated_at,omitempty" db:"updated_at"`
+	Timestamp    time.Time        `json:"timestamp" db:"timestamp"`
+	StatusCode   int              `json:"status_code" db:"status_code"`
+	ResponseBody string           `json:"response_body" db:"response_body"`
+	ErrorMessage string           `json:"error_message" db:"error_message"`
+	StartedAt    time.Time        `json:"started_at" db:"started_at"`
+	CompletedAt  time.Time        `json:"completed_at" db:"completed_at"`
 }
 
 type OccurrenceFilter struct {
-	Tags []string
-	Page int
+	Tags  []string
+	Page  int
 	Limit int
 }
 
@@ -40,4 +44,4 @@ type PaginatedResponse struct {
 		Limit int `json:"limit"`
 		Total int `json:"total"`
 	} `json:"pagination"`
-} 
+}

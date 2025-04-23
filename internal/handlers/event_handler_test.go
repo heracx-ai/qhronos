@@ -305,6 +305,44 @@ func TestEventHandler(t *testing.T) {
 
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 	})
+
+	// Test: Create Event with malformed JSON
+	t.Run("Create Event with Malformed JSON", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		// Missing closing brace
+		malformedJSON := `{"name": "Bad Event", "webhook_url": "https://example.com", "start_time": "2024-03-20T00:00:00Z", "metadata": {"key": "value"}`
+		r := httptest.NewRequest("POST", "/events", bytes.NewBufferString(malformedJSON))
+		r.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(w, r)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+		assert.Contains(t, w.Body.String(), "error")
+	})
+
+	// Test: Update Event with malformed JSON
+	t.Run("Update Event with Malformed JSON", func(t *testing.T) {
+		cleanup()
+		// Create event to update
+		event := &models.Event{
+			ID:         uuid.New(),
+			Name:       "Event to Update",
+			StartTime:  time.Now(),
+			WebhookURL: "https://example.com/webhook",
+			Metadata:   datatypes.JSON([]byte(`{"key": "value"}`)),
+			Tags:       pq.StringArray{"test"},
+			Status:     models.EventStatusActive,
+			CreatedAt:  time.Now(),
+		}
+		err := eventRepo.Create(context.Background(), event)
+		require.NoError(t, err)
+
+		w := httptest.NewRecorder()
+		malformedJSON := `{"name": "Updated Name", "metadata": {"key": "value"}` // missing closing brace
+		r := httptest.NewRequest("PUT", "/events/"+event.ID.String(), bytes.NewBufferString(malformedJSON))
+		r.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(w, r)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+		assert.Contains(t, w.Body.String(), "error")
+	})
 }
 
 func stringPtr(s string) *string {

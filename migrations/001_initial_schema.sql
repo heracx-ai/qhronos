@@ -1,3 +1,5 @@
+-- Initial Schema: Insert-only occurrences table and all required tables
+
 -- Enable UUID extension
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
@@ -59,53 +61,27 @@ COMMENT ON COLUMN events.schedule IS 'JSON schedule format with frequency, inter
 COMMENT ON COLUMN events.metadata IS 'Event metadata in JSONB format';
 COMMENT ON COLUMN events.hmac_secret IS 'Custom HMAC secret for webhook signing. If null, uses default secret.';
 
--- Occurrences table with retention tracking
+-- Occurrences table (insert-only, append-only)
+
 CREATE TABLE occurrences (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id SERIAL PRIMARY KEY,
+    occurrence_id UUID NOT NULL,
     event_id UUID NOT NULL REFERENCES events(id) ON DELETE CASCADE,
-    scheduled_at TIMESTAMP WITH TIME ZONE NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending',
-    last_attempt TIMESTAMP WITH TIME ZONE,
+    scheduled_at TIMESTAMPTZ NOT NULL,
+    status TEXT NOT NULL,
     attempt_count INTEGER NOT NULL DEFAULT 0,
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
--- Add comment to occurrences table
-COMMENT ON COLUMN occurrences.updated_at IS 'Last update timestamp of the occurrence';
-
--- Create trigger function to update updated_at column
-CREATE OR REPLACE FUNCTION update_occurrences_updated_at()
-RETURNS TRIGGER AS $$
-BEGIN
-    NEW.updated_at = CURRENT_TIMESTAMP;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
--- Create trigger to call the function before update
-CREATE TRIGGER update_occurrences_updated_at_trigger
-    BEFORE UPDATE ON occurrences
-    FOR EACH ROW
-    EXECUTE FUNCTION update_occurrences_updated_at();
-
--- Webhook delivery attempts with retention period
-CREATE TABLE webhook_attempts (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    occurrence_id UUID REFERENCES occurrences(id) ON DELETE CASCADE,
-    attempt_number INT NOT NULL,
+    timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     status_code INT,
     response_body TEXT,
     error_message TEXT,
-    started_at TIMESTAMPTZ NOT NULL,
-    completed_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ DEFAULT now(),
-    archived_at TIMESTAMPTZ,
-    CONSTRAINT valid_attempt_period CHECK (
-        -- Ensure attempts are not kept beyond retention period
-        created_at >= (now() - interval '30 days')
-    )
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ
 );
+
+CREATE INDEX idx_occurrences_occurrence_id ON occurrences(occurrence_id);
+CREATE INDEX idx_occurrences_event_id ON occurrences(event_id);
+CREATE INDEX idx_occurrences_scheduled_at ON occurrences(scheduled_at);
+CREATE INDEX idx_occurrences_status ON occurrences(status);
 
 -- Analytics Tables with Retention Periods
 
@@ -195,21 +171,6 @@ CREATE TABLE archived_occurrences (
     original_occurrence_id UUID NOT NULL
 );
 
--- Archived webhook attempts
-CREATE TABLE archived_webhook_attempts (
-    id UUID PRIMARY KEY,
-    occurrence_id UUID NOT NULL,
-    attempt_number INT NOT NULL,
-    status_code INT,
-    response_body TEXT,
-    error_message TEXT,
-    started_at TIMESTAMPTZ NOT NULL,
-    completed_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ,
-    archived_at TIMESTAMPTZ NOT NULL,
-    original_attempt_id UUID NOT NULL
-);
-
 -- Create Indexes
 
 -- Events indexes
@@ -218,16 +179,6 @@ CREATE INDEX idx_events_tags ON events USING GIN(tags);
 CREATE INDEX idx_events_created_at ON events(created_at);
 CREATE INDEX idx_events_schedule ON events USING GIN(schedule);
 CREATE INDEX idx_events_metadata ON events USING GIN(metadata);
-
--- Occurrences indexes
-CREATE INDEX idx_occurrences_event_id ON occurrences(event_id);
-CREATE INDEX idx_occurrences_scheduled_at ON occurrences(scheduled_at);
-CREATE INDEX idx_occurrences_status ON occurrences(status);
-CREATE INDEX idx_occurrences_scheduled_status ON occurrences(scheduled_at) WHERE status = 'scheduled';
-
--- Webhook attempts indexes
-CREATE INDEX idx_webhook_attempts_occurrence_id ON webhook_attempts(occurrence_id);
-CREATE INDEX idx_webhook_attempts_status_code ON webhook_attempts(status_code);
 
 -- Analytics indexes
 CREATE INDEX idx_analytics_daily_date ON analytics_daily(date);
@@ -249,19 +200,6 @@ BEGIN
     SELECT value INTO retention_policies
     FROM system_config
     WHERE key = 'retention_policies';
-
-    -- Archive old webhook attempts
-    webhook_retention := (retention_policies->'logs'->>'webhook_attempts')::INTERVAL;
-    INSERT INTO archived_webhook_attempts
-    SELECT 
-        id, occurrence_id, attempt_number, status_code, 
-        response_body, error_message, started_at, completed_at,
-        created_at, now(), id
-    FROM webhook_attempts
-    WHERE created_at < (now() - webhook_retention);
-
-    DELETE FROM webhook_attempts
-    WHERE created_at < (now() - webhook_retention);
 
     -- Archive old events and occurrences
     event_retention := (retention_policies->'events'->>'max_past_occurrences')::INTERVAL;

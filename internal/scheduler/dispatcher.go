@@ -119,29 +119,37 @@ func (d *Dispatcher) DispatchWebhook(ctx context.Context, occurrence *models.Occ
 		baseReq.Header.Set("X-Qhronos-Signature", signature)
 	}
 
+	// Track attempts
+	attemptCount := 0
+	var lastAttempt time.Time
+	var finalStatus models.OccurrenceStatus
+	var statusCode int
+	var responseBody string
+	var errorMessage string
+
 	// Execute webhook request with retries
 	err = d.retryWithBackoff(ctx, func() error {
+		attemptCount++
+		lastAttempt = time.Now()
 		// Clone the base request and set the body for this attempt
 		req := baseReq.Clone(ctx)
 		req.Body = ioutil.NopCloser(bytes.NewBuffer(jsonPayload))
 
 		resp, err := d.client.Do(req)
 		if err != nil {
-			// Update status to failed but continue retrying
-			updateErr := d.occurrenceRepo.UpdateStatus(ctx, occurrence.ID, models.OccurrenceStatusFailed)
-			if updateErr != nil {
-				return fmt.Errorf("error updating occurrence status: %w (original error: %v)", updateErr, err)
-			}
+			finalStatus = models.OccurrenceStatusFailed
+			statusCode = 0
+			responseBody = ""
+			errorMessage = err.Error()
 			return fmt.Errorf("webhook request failed: %w", err)
 		}
 
 		// Handle nil response
 		if resp == nil {
-			// Update status to failed but continue retrying
-			updateErr := d.occurrenceRepo.UpdateStatus(ctx, occurrence.ID, models.OccurrenceStatusFailed)
-			if updateErr != nil {
-				return fmt.Errorf("error updating occurrence status: %w", updateErr)
-			}
+			finalStatus = models.OccurrenceStatusFailed
+			statusCode = 0
+			responseBody = ""
+			errorMessage = "empty response from server"
 			return fmt.Errorf("empty response from server")
 		}
 
@@ -153,23 +161,34 @@ func (d *Dispatcher) DispatchWebhook(ctx context.Context, occurrence *models.Occ
 		}()
 
 		// Check response status
+		statusCode = resp.StatusCode
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			// Update occurrence status to completed
-			updateErr := d.occurrenceRepo.UpdateStatus(ctx, occurrence.ID, models.OccurrenceStatusCompleted)
-			if updateErr != nil {
-				return fmt.Errorf("error updating occurrence status: %w", updateErr)
-			}
+			finalStatus = models.OccurrenceStatusCompleted
+			responseBody = ""
+			errorMessage = ""
 			return nil
 		}
 
 		// Non-2xx status code
-		// Update status to failed but continue retrying
-		updateErr := d.occurrenceRepo.UpdateStatus(ctx, occurrence.ID, models.OccurrenceStatusFailed)
-		if updateErr != nil {
-			return fmt.Errorf("error updating occurrence status: %w", updateErr)
-		}
+		finalStatus = models.OccurrenceStatusFailed
+		responseBody = ""
+		errorMessage = fmt.Sprintf("received non-2xx status code: %d", resp.StatusCode)
 		return fmt.Errorf("received non-2xx status code: %d", resp.StatusCode)
 	})
+
+	// Log the result to Postgres as a new occurrence record (append-only, for history)
+	logOccurrence := &models.Occurrence{
+		OccurrenceID: occurrence.OccurrenceID,
+		EventID:      occurrence.EventID,
+		ScheduledAt:  occurrence.ScheduledAt,
+		Status:       finalStatus,
+		AttemptCount: attemptCount,
+		Timestamp:    lastAttempt,
+		StatusCode:   statusCode,
+		ResponseBody: responseBody,
+		ErrorMessage: errorMessage,
+	}
+	_ = d.occurrenceRepo.Create(ctx, logOccurrence) // Ignore error to avoid blocking delivery
 
 	return err
 }
@@ -195,17 +214,17 @@ func (d *Dispatcher) Run(ctx context.Context, scheduler *Scheduler) error {
 			for _, occurrence := range occurrences {
 				event, err := d.eventRepo.GetByID(ctx, occurrence.EventID)
 				if err != nil {
-					fmt.Printf("Error getting event for occurrence %s: %v\n", occurrence.ID, err)
+					fmt.Printf("Error getting event for occurrence %d: %v\n", occurrence.ID, err)
 					continue
 				}
 				if event == nil {
-					fmt.Printf("Event not found for occurrence %s\n", occurrence.ID)
+					fmt.Printf("Event not found for occurrence %d\n", occurrence.ID)
 					continue
 				}
 
 				// Dispatch webhook
 				if err := d.DispatchWebhook(ctx, occurrence, event); err != nil {
-					fmt.Printf("Error dispatching webhook for occurrence %s: %v\n", occurrence.ID, err)
+					fmt.Printf("Error dispatching webhook for occurrence %d: %v\n", occurrence.ID, err)
 					continue
 				}
 			}

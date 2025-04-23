@@ -23,9 +23,10 @@ func NewOccurrenceHandler(eventRepo *repository.EventRepository, occurrenceRepo 
 }
 
 func (h *OccurrenceHandler) GetOccurrence(c *gin.Context) {
-	id, err := uuid.Parse(c.Param("id"))
+	idStr := c.Param("id")
+	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid occurrence ID"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid occurrence ID (must be integer)"})
 		return
 	}
 

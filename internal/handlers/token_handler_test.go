@@ -125,6 +125,16 @@ func TestTokenHandler(t *testing.T) {
 
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 	})
+
+	t.Run("Create Token - Malformed JSON", func(t *testing.T) {
+		malformedJSON := `{"type": "jwt", "sub": "user", "access": "admin", "scope": ["user:test"]` // missing closing brace
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/tokens", bytes.NewBufferString(malformedJSON))
+		req.Header.Set("Authorization", "Bearer "+masterToken)
+		router.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+		assert.Contains(t, w.Body.String(), "error")
+	})
 }
 
 func TestTokenMiddleware(t *testing.T) {
@@ -247,4 +257,4 @@ func TestTokenMiddleware(t *testing.T) {
 
 		assert.Equal(t, http.StatusUnauthorized, w.Code)
 	})
-} 
+}

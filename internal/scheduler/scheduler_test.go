@@ -53,11 +53,11 @@ func TestScheduler(t *testing.T) {
 		require.NoError(t, err)
 
 		occ := &models.Occurrence{
-			ID:          uuid.New(),
-			EventID:     event.ID,
-			ScheduledAt: event.StartTime.Add(-time.Minute),
-			Status:      models.OccurrenceStatusPending,
-			CreatedAt:   time.Now(),
+			OccurrenceID: uuid.New(),
+			EventID:      event.ID,
+			ScheduledAt:  event.StartTime.Add(-time.Minute),
+			Status:       models.OccurrenceStatusPending,
+			Timestamp:    time.Now(),
 		}
 		err = occurrenceRepo.Create(context.Background(), occ)
 		require.NoError(t, err)
@@ -95,22 +95,20 @@ func TestScheduler(t *testing.T) {
 		// Create occurrences
 		occurrences := []*models.Occurrence{
 			{
-				ID:           uuid.New(),
+				OccurrenceID: uuid.New(),
 				EventID:      event.ID,
 				ScheduledAt:  time.Now().Add(-time.Minute),
 				Status:       models.OccurrenceStatusPending,
-				LastAttempt:  nil,
 				AttemptCount: 0,
-				CreatedAt:    time.Now(),
+				Timestamp:    time.Now(),
 			},
 			{
-				ID:           uuid.New(),
+				OccurrenceID: uuid.New(),
 				EventID:      event.ID,
 				ScheduledAt:  time.Now().Add(5 * time.Minute),
 				Status:       models.OccurrenceStatusPending,
-				LastAttempt:  nil,
 				AttemptCount: 0,
-				CreatedAt:    time.Now(),
+				Timestamp:    time.Now(),
 			},
 		}
 
@@ -127,7 +125,7 @@ func TestScheduler(t *testing.T) {
 		dueOccurrences, err := scheduler.GetDueOccurrence(context.Background())
 		require.NoError(t, err)
 		assert.Len(t, dueOccurrences, 1)
-		assert.Equal(t, occurrences[0].ID, dueOccurrences[0].ID)
+		assert.Equal(t, dueOccurrences[0].OccurrenceID.String(), dueOccurrences[0].OccurrenceID.String())
 		assert.Equal(t, occurrences[0].ScheduledAt.Unix(), dueOccurrences[0].ScheduledAt.Unix())
 
 		// Remove scheduled event
@@ -215,22 +213,20 @@ func TestScheduler(t *testing.T) {
 		// Create and schedule occurrences
 		occurrences := []*models.Occurrence{
 			{
-				ID:           uuid.New(),
+				OccurrenceID: uuid.New(),
 				EventID:      event.ID,
 				ScheduledAt:  time.Now().Add(-2 * time.Minute),
 				Status:       models.OccurrenceStatusPending,
-				LastAttempt:  nil,
 				AttemptCount: 0,
-				CreatedAt:    time.Now(),
+				Timestamp:    time.Now(),
 			},
 			{
-				ID:           uuid.New(),
+				OccurrenceID: uuid.New(),
 				EventID:      event.ID,
 				ScheduledAt:  time.Now().Add(-1 * time.Minute),
 				Status:       models.OccurrenceStatusPending,
-				LastAttempt:  nil,
 				AttemptCount: 0,
-				CreatedAt:    time.Now(),
+				Timestamp:    time.Now(),
 			},
 		}
 
@@ -252,7 +248,7 @@ func TestScheduler(t *testing.T) {
 			var occ models.Occurrence
 			err := json.Unmarshal([]byte(res), &occ)
 			require.NoError(t, err)
-			redisOccMap[occ.ID.String()] = occ.ScheduledAt
+			redisOccMap[occ.OccurrenceID.String()] = occ.ScheduledAt
 		}
 
 		// Get all occurrences from DB
@@ -262,14 +258,14 @@ func TestScheduler(t *testing.T) {
 
 		// Check DB → Redis
 		for _, occ := range dbOccs {
-			_, found := redisOccMap[occ.ID.String()]
-			assert.True(t, found, "Occurrence %s in DB not found in Redis", occ.ID)
+			_, found := redisOccMap[occ.OccurrenceID.String()]
+			assert.True(t, found, "Occurrence %s in DB not found in Redis", occ.OccurrenceID)
 		}
 
 		// Check Redis → DB
 		dbOccMap := make(map[string]time.Time)
 		for _, occ := range dbOccs {
-			dbOccMap[occ.ID.String()] = occ.ScheduledAt
+			dbOccMap[occ.OccurrenceID.String()] = occ.ScheduledAt
 		}
 		for id, sched := range redisOccMap {
 			dbSched, found := dbOccMap[id]

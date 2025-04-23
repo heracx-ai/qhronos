@@ -329,13 +329,12 @@ func TestEventRepository(t *testing.T) {
 
 		// Create occurrence
 		occurrence := &models.Occurrence{
-			ID:           uuid.New(),
+			OccurrenceID: uuid.New(),
 			EventID:      event.ID,
 			ScheduledAt:  time.Now(),
 			Status:       models.OccurrenceStatusPending,
-			LastAttempt:  nil,
 			AttemptCount: 0,
-			CreatedAt:    time.Now(),
+			Timestamp:    time.Now(),
 		}
 
 		occurrenceRepo := NewOccurrenceRepository(db)
@@ -431,11 +430,12 @@ func TestDeleteOldEvents(t *testing.T) {
 
 	// Create occurrence for event2
 	occurrence := &models.Occurrence{
-		ID:          uuid.New(),
-		EventID:     event2.ID,
-		ScheduledAt: time.Now().Add(24 * time.Hour),
-		Status:      models.OccurrenceStatusPending,
-		CreatedAt:   time.Now(),
+		OccurrenceID: uuid.New(),
+		EventID:      event2.ID,
+		ScheduledAt:  time.Now().Add(24 * time.Hour),
+		Status:       models.OccurrenceStatusPending,
+		AttemptCount: 0,
+		Timestamp:    time.Now(),
 	}
 	err = repo.CreateOccurrence(ctx, occurrence)
 	assert.NoError(t, err)
@@ -481,20 +481,22 @@ func TestDeleteOldOccurrences(t *testing.T) {
 
 	// Create old occurrence
 	oldOccurrence := &models.Occurrence{
-		ID:          uuid.New(),
-		EventID:     event.ID,
-		ScheduledAt: time.Now().Add(-48 * time.Hour),
-		Status:      models.OccurrenceStatusCompleted,
-		CreatedAt:   time.Now().Add(-48 * time.Hour),
+		OccurrenceID: uuid.New(),
+		EventID:      event.ID,
+		ScheduledAt:  time.Now().Add(-48 * time.Hour),
+		Status:       models.OccurrenceStatusCompleted,
+		AttemptCount: 0,
+		Timestamp:    time.Now().Add(-48 * time.Hour),
 	}
 
 	// Create recent occurrence
 	recentOccurrence := &models.Occurrence{
-		ID:          uuid.New(),
-		EventID:     event.ID,
-		ScheduledAt: time.Now().Add(-12 * time.Hour),
-		Status:      models.OccurrenceStatusCompleted,
-		CreatedAt:   time.Now().Add(-12 * time.Hour),
+		OccurrenceID: uuid.New(),
+		EventID:      event.ID,
+		ScheduledAt:  time.Now().Add(-12 * time.Hour),
+		Status:       models.OccurrenceStatusCompleted,
+		AttemptCount: 0,
+		Timestamp:    time.Now().Add(-12 * time.Hour),
 	}
 
 	// Create occurrences

@@ -224,23 +224,30 @@ func (r *EventRepository) ListActive(ctx context.Context) ([]*models.Event, erro
 
 func (r *EventRepository) CreateOccurrence(ctx context.Context, occurrence *models.Occurrence) error {
 	query := `
-		INSERT INTO occurrences (id, event_id, scheduled_at, status, last_attempt, attempt_count, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		RETURNING id`
+		INSERT INTO occurrences (occurrence_id, event_id, scheduled_at, status, attempt_count, timestamp, status_code, response_body, error_message, started_at, completed_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		RETURNING id, timestamp`
 
-	now := time.Now()
-	occurrence.ID = uuid.New()
-	occurrence.CreatedAt = now
+	if occurrence.OccurrenceID == uuid.Nil {
+		occurrence.OccurrenceID = uuid.New()
+	}
+	if occurrence.Timestamp.IsZero() {
+		occurrence.Timestamp = time.Now()
+	}
 
 	err := r.db.QueryRowContext(ctx, query,
-		occurrence.ID,
+		occurrence.OccurrenceID,
 		occurrence.EventID,
 		occurrence.ScheduledAt,
 		occurrence.Status,
-		occurrence.LastAttempt,
 		occurrence.AttemptCount,
-		occurrence.CreatedAt,
-	).Scan(&occurrence.ID)
+		occurrence.Timestamp,
+		occurrence.StatusCode,
+		occurrence.ResponseBody,
+		occurrence.ErrorMessage,
+		occurrence.StartedAt,
+		occurrence.CompletedAt,
+	).Scan(&occurrence.ID, &occurrence.Timestamp)
 
 	if err != nil {
 		return fmt.Errorf("error creating occurrence: %w", err)
@@ -249,9 +256,9 @@ func (r *EventRepository) CreateOccurrence(ctx context.Context, occurrence *mode
 	return nil
 }
 
-func (r *EventRepository) GetOccurrenceByID(ctx context.Context, id uuid.UUID) (*models.Occurrence, error) {
+func (r *EventRepository) GetOccurrenceByID(ctx context.Context, id int) (*models.Occurrence, error) {
 	query := `
-		SELECT id, event_id, scheduled_at, status, last_attempt, attempt_count, created_at
+		SELECT id, occurrence_id, event_id, scheduled_at, status, attempt_count, timestamp, status_code, response_body, error_message, started_at, completed_at
 		FROM occurrences
 		WHERE id = $1`
 
@@ -427,4 +434,4 @@ func (r *EventRepository) ListEvents(ctx context.Context, filter models.EventFil
 	}
 
 	return events, nil
-} 
+}

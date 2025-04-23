@@ -128,7 +128,6 @@ func (e *Expander) expandRecurringEvent(ctx context.Context, event *models.Event
 			}
 		}
 	case "weekly":
-		// If no specific days are specified, use the start time's day
 		if len(schedule.ByDay) == 0 {
 			for t := startTime; t.Before(endTime); t = t.AddDate(0, 0, 7*schedule.Interval) {
 				if t.After(now) {
@@ -136,7 +135,6 @@ func (e *Expander) expandRecurringEvent(ctx context.Context, event *models.Event
 				}
 			}
 		} else {
-			// Map day strings to time.Weekday
 			weekdayMap := map[string]time.Weekday{
 				"SU": time.Sunday,
 				"MO": time.Monday,
@@ -146,13 +144,9 @@ func (e *Expander) expandRecurringEvent(ctx context.Context, event *models.Event
 				"FR": time.Friday,
 				"SA": time.Saturday,
 			}
-
-			// For each week in the interval
 			for t := startTime; t.Before(endTime); t = t.AddDate(0, 0, 7*schedule.Interval) {
-				// For each specified day in the week
 				for _, day := range schedule.ByDay {
 					weekday := weekdayMap[day]
-					// Calculate the next occurrence of this weekday
 					daysToAdd := (int(weekday) - int(t.Weekday()) + 7) % 7
 					nextDay := t.AddDate(0, 0, daysToAdd)
 					if nextDay.After(now) && nextDay.Before(endTime) {
@@ -162,7 +156,6 @@ func (e *Expander) expandRecurringEvent(ctx context.Context, event *models.Event
 			}
 		}
 	case "monthly":
-		// If no specific days are specified, use the start time's day
 		if len(schedule.ByMonthDay) == 0 {
 			for t := startTime; t.Before(endTime); t = t.AddDate(0, schedule.Interval, 0) {
 				if t.After(now) {
@@ -170,9 +163,7 @@ func (e *Expander) expandRecurringEvent(ctx context.Context, event *models.Event
 				}
 			}
 		} else {
-			// For each month in the interval
 			for t := startTime; t.Before(endTime); t = t.AddDate(0, schedule.Interval, 0) {
-				// For each specified day in the month
 				for _, day := range schedule.ByMonthDay {
 					nextDay := time.Date(t.Year(), t.Month(), day, t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), t.Location())
 					if nextDay.After(now) && nextDay.Before(endTime) {
@@ -182,7 +173,6 @@ func (e *Expander) expandRecurringEvent(ctx context.Context, event *models.Event
 			}
 		}
 	case "yearly":
-		// If no specific months are specified, use the start time's month
 		if len(schedule.ByMonth) == 0 {
 			for t := startTime; t.Before(endTime); t = t.AddDate(schedule.Interval, 0, 0) {
 				if t.After(now) {
@@ -190,9 +180,7 @@ func (e *Expander) expandRecurringEvent(ctx context.Context, event *models.Event
 				}
 			}
 		} else {
-			// For each year in the interval
 			for t := startTime; t.Before(endTime); t = t.AddDate(schedule.Interval, 0, 0) {
-				// For each specified month in the year
 				for _, month := range schedule.ByMonth {
 					nextMonth := time.Date(t.Year(), time.Month(month), t.Day(), t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), t.Location())
 					if nextMonth.After(now) && nextMonth.Before(endTime) {
@@ -205,12 +193,10 @@ func (e *Expander) expandRecurringEvent(ctx context.Context, event *models.Event
 		return fmt.Errorf("invalid frequency: %s", schedule.Frequency)
 	}
 
-	// Apply count limit if specified
 	if schedule.Count != nil && len(occurrences) > *schedule.Count {
 		occurrences = occurrences[:*schedule.Count]
 	}
 
-	// Apply until limit if specified
 	if schedule.Until != nil {
 		untilTime, err := time.Parse(time.RFC3339, *schedule.Until)
 		if err != nil {
@@ -227,33 +213,14 @@ func (e *Expander) expandRecurringEvent(ctx context.Context, event *models.Event
 
 	log.Printf("Found %d future occurrences for event %s", len(occurrences), event.ID)
 
-	// Create occurrences
 	for _, t := range occurrences {
-		exists, err := e.occurrenceRepo.ExistsAtTime(ctx, event.ID, t)
-		if err != nil {
-			log.Printf("Error checking occurrence existence for event %s at %v: %v", event.ID, t, err)
-			continue
-		}
-		if exists {
-			log.Printf("Occurrence already exists for event %s at %v", event.ID, t)
-			continue
-		}
-
 		occurrence := &models.Occurrence{
-			ID:          uuid.New(),
-			EventID:     event.ID,
-			ScheduledAt: t,
-			Status:      models.OccurrenceStatusPending,
-			CreatedAt:   now,
+			OccurrenceID: uuid.New(),
+			EventID:      event.ID,
+			ScheduledAt:  t,
+			Status:       models.OccurrenceStatusPending,
+			Timestamp:    now,
 		}
-
-		if err := e.occurrenceRepo.Create(ctx, occurrence); err != nil {
-			log.Printf("Error creating occurrence for event %s at %v: %v", event.ID, t, err)
-			continue
-		}
-		log.Printf("Created new occurrence: id=%s, event_id=%s, scheduled_at=%v",
-			occurrence.ID, event.ID, t)
-		// Schedule in Redis with retry
 		e.scheduleWithRetry(ctx, occurrence)
 	}
 
@@ -267,7 +234,6 @@ func (e *Expander) expandNonRecurringEvent(ctx context.Context, event *models.Ev
 		return fmt.Errorf("event schedule is nil")
 	}
 
-	// Check if the event is in the future and within look-ahead window
 	now := time.Now().UTC()
 	startTime := event.StartTime.UTC()
 
@@ -282,33 +248,13 @@ func (e *Expander) expandNonRecurringEvent(ctx context.Context, event *models.Ev
 		return nil
 	}
 
-	// Check if occurrence already exists
-	exists, err := e.occurrenceRepo.ExistsAtTime(ctx, event.ID, startTime)
-	if err != nil {
-		log.Printf("Error checking occurrence existence for event %s: %v", event.ID, err)
-		return fmt.Errorf("failed to check occurrence existence: %w", err)
-	}
-	if exists {
-		log.Printf("Occurrence already exists for event %s", event.ID)
-		return nil
-	}
-
-	// Create occurrence
 	occurrence := &models.Occurrence{
-		ID:          uuid.New(),
-		EventID:     event.ID,
-		ScheduledAt: startTime,
-		Status:      models.OccurrenceStatusPending,
-		CreatedAt:   now,
+		OccurrenceID: uuid.New(),
+		EventID:      event.ID,
+		ScheduledAt:  startTime,
+		Status:       models.OccurrenceStatusPending,
+		Timestamp:    now,
 	}
-
-	if err := e.occurrenceRepo.Create(ctx, occurrence); err != nil {
-		log.Printf("Error creating occurrence for event %s: %v", event.ID, err)
-		return fmt.Errorf("failed to create occurrence: %w", err)
-	}
-	log.Printf("Created new occurrence for non-recurring event: id=%s, event_id=%s, scheduled_at=%v",
-		occurrence.ID, event.ID, startTime)
-	// Schedule in Redis with retry
 	e.scheduleWithRetry(ctx, occurrence)
 
 	return nil

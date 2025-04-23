@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -60,22 +61,30 @@ func TestOccurrenceHandler(t *testing.T) {
 
 		occurrences := []*models.Occurrence{
 			{
-				ID:           uuid.New(),
+				OccurrenceID: uuid.New(),
 				EventID:      event.ID,
 				ScheduledAt:  time.Now(),
 				Status:       models.OccurrenceStatusPending,
-				LastAttempt:  nil,
 				AttemptCount: 0,
-				CreatedAt:    time.Now(),
+				Timestamp:    time.Now(),
+				StatusCode:   0,
+				ResponseBody: "",
+				ErrorMessage: "",
+				StartedAt:    time.Time{},
+				CompletedAt:  time.Time{},
 			},
 			{
-				ID:           uuid.New(),
+				OccurrenceID: uuid.New(),
 				EventID:      event.ID,
 				ScheduledAt:  time.Now().Add(time.Hour),
 				Status:       models.OccurrenceStatusPending,
-				LastAttempt:  nil,
 				AttemptCount: 0,
-				CreatedAt:    time.Now(),
+				Timestamp:    time.Now(),
+				StatusCode:   0,
+				ResponseBody: "",
+				ErrorMessage: "",
+				StartedAt:    time.Time{},
+				CompletedAt:  time.Time{},
 			},
 		}
 
@@ -140,22 +149,30 @@ func TestOccurrenceHandler(t *testing.T) {
 
 			occurrences := []*models.Occurrence{
 				{
-					ID:           uuid.New(),
+					OccurrenceID: uuid.New(),
 					EventID:      event.ID,
 					ScheduledAt:  time.Now(),
 					Status:       models.OccurrenceStatusPending,
-					LastAttempt:  nil,
 					AttemptCount: 0,
-					CreatedAt:    time.Now(),
+					Timestamp:    time.Now(),
+					StatusCode:   0,
+					ResponseBody: "",
+					ErrorMessage: "",
+					StartedAt:    time.Time{},
+					CompletedAt:  time.Time{},
 				},
 				{
-					ID:           uuid.New(),
+					OccurrenceID: uuid.New(),
 					EventID:      event.ID,
 					ScheduledAt:  time.Now().Add(time.Hour),
 					Status:       models.OccurrenceStatusPending,
-					LastAttempt:  nil,
 					AttemptCount: 0,
-					CreatedAt:    time.Now(),
+					Timestamp:    time.Now(),
+					StatusCode:   0,
+					ResponseBody: "",
+					ErrorMessage: "",
+					StartedAt:    time.Time{},
+					CompletedAt:  time.Time{},
 				},
 			}
 
@@ -203,19 +220,23 @@ func TestOccurrenceHandler(t *testing.T) {
 
 		// Create occurrence
 		occurrence := &models.Occurrence{
-			ID:           uuid.New(),
+			OccurrenceID: uuid.New(),
 			EventID:      event.ID,
 			ScheduledAt:  time.Now(),
 			Status:       models.OccurrenceStatusPending,
-			LastAttempt:  nil,
 			AttemptCount: 0,
-			CreatedAt:    time.Now(),
+			Timestamp:    time.Now(),
+			StatusCode:   0,
+			ResponseBody: "",
+			ErrorMessage: "",
+			StartedAt:    time.Time{},
+			CompletedAt:  time.Time{},
 		}
 		err = occurrenceRepo.Create(context.Background(), occurrence)
 		require.NoError(t, err)
 
 		w := httptest.NewRecorder()
-		req := httptest.NewRequest("GET", "/occurrences/"+occurrence.ID.String(), nil)
+		req := httptest.NewRequest("GET", "/occurrences/"+strconv.Itoa(occurrence.ID), nil)
 		router.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusOK, w.Code)
@@ -223,7 +244,7 @@ func TestOccurrenceHandler(t *testing.T) {
 		var response models.Occurrence
 		err = json.Unmarshal(w.Body.Bytes(), &response)
 		require.NoError(t, err)
-		assert.Equal(t, occurrence.ID, response.ID)
+		assert.Equal(t, occurrence.OccurrenceID, response.OccurrenceID)
 		assert.Equal(t, occurrence.EventID, response.EventID)
 		assert.Equal(t, occurrence.Status, response.Status)
 	})
@@ -274,22 +295,30 @@ func TestOccurrenceHandler(t *testing.T) {
 		// Create test occurrences
 		occurrences := []*models.Occurrence{
 			{
-				ID:           uuid.New(),
+				OccurrenceID: uuid.New(),
 				EventID:      events[0].ID,
 				ScheduledAt:  time.Now(),
 				Status:       models.OccurrenceStatusPending,
-				LastAttempt:  nil,
 				AttemptCount: 0,
-				CreatedAt:    time.Now(),
+				Timestamp:    time.Now(),
+				StatusCode:   0,
+				ResponseBody: "",
+				ErrorMessage: "",
+				StartedAt:    time.Time{},
+				CompletedAt:  time.Time{},
 			},
 			{
-				ID:           uuid.New(),
+				OccurrenceID: uuid.New(),
 				EventID:      events[0].ID,
 				ScheduledAt:  time.Now().Add(time.Hour),
 				Status:       models.OccurrenceStatusPending,
-				LastAttempt:  nil,
 				AttemptCount: 0,
-				CreatedAt:    time.Now(),
+				Timestamp:    time.Now(),
+				StatusCode:   0,
+				ResponseBody: "",
+				ErrorMessage: "",
+				StartedAt:    time.Time{},
+				CompletedAt:  time.Time{},
 			},
 		}
 
@@ -313,8 +342,9 @@ func TestOccurrenceHandler(t *testing.T) {
 
 	t.Run("Non-existent Occurrence", func(t *testing.T) {
 		cleanup()
+		nonExistentID := 999999
 		w := httptest.NewRecorder()
-		req := httptest.NewRequest("GET", "/occurrences/"+uuid.New().String(), nil)
+		req := httptest.NewRequest("GET", "/occurrences/"+strconv.Itoa(nonExistentID), nil)
 		router.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusNotFound, w.Code)

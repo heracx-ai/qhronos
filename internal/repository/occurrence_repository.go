@@ -3,7 +3,6 @@ package repository
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"log"
 	"time"
 
@@ -22,17 +21,17 @@ func NewOccurrenceRepository(db *sqlx.DB) *OccurrenceRepository {
 	return &OccurrenceRepository{db: db}
 }
 
-func (r *OccurrenceRepository) GetByID(ctx context.Context, id uuid.UUID) (*models.Occurrence, error) {
-	log.Printf("Getting occurrence by ID: %s", id)
+func (r *OccurrenceRepository) GetByID(ctx context.Context, id int) (*models.Occurrence, error) {
+	log.Printf("Getting occurrence by ID: %d", id)
 	var occurrence models.Occurrence
 	query := `SELECT * FROM occurrences WHERE id = $1`
 	err := r.db.GetContext(ctx, &occurrence, query, id)
 	if err == sql.ErrNoRows {
-		log.Printf("Occurrence not found: %s", id)
+		log.Printf("Occurrence not found: %d", id)
 		return nil, nil
 	}
 	if err != nil {
-		log.Printf("Error getting occurrence %s: %v", id, err)
+		log.Printf("Error getting occurrence %d: %v", id, err)
 		return nil, err
 	}
 	return &occurrence, err
@@ -64,14 +63,18 @@ func (r *OccurrenceRepository) ListByTags(ctx context.Context, filter models.Occ
 
 	// Use a temporary struct to handle the array type
 	var tempOccurrences []struct {
-		ID           uuid.UUID  `db:"id"`
-		EventID      uuid.UUID  `db:"event_id"`
-		ScheduledAt  time.Time  `db:"scheduled_at"`
-		Status       string     `db:"status"`
-		LastAttempt  *time.Time `db:"last_attempt"`
-		AttemptCount int        `db:"attempt_count"`
-		CreatedAt    time.Time  `db:"created_at"`
-		UpdatedAt    *time.Time `db:"updated_at"`
+		ID           int       `db:"id"`
+		OccurrenceID uuid.UUID `db:"occurrence_id"`
+		EventID      uuid.UUID `db:"event_id"`
+		ScheduledAt  time.Time `db:"scheduled_at"`
+		Status       string    `db:"status"`
+		AttemptCount int       `db:"attempt_count"`
+		Timestamp    time.Time `db:"timestamp"`
+		StatusCode   int       `db:"status_code"`
+		ResponseBody string    `db:"response_body"`
+		ErrorMessage string    `db:"error_message"`
+		StartedAt    time.Time `db:"started_at"`
+		CompletedAt  time.Time `db:"completed_at"`
 	}
 
 	err = r.db.SelectContext(ctx, &tempOccurrences, query, pq.Array(filter.Tags), filter.Limit, offset)
@@ -85,101 +88,91 @@ func (r *OccurrenceRepository) ListByTags(ctx context.Context, filter models.Occ
 	for i, tempOccurrence := range tempOccurrences {
 		occurrences[i] = models.Occurrence{
 			ID:           tempOccurrence.ID,
+			OccurrenceID: tempOccurrence.OccurrenceID,
 			EventID:      tempOccurrence.EventID,
 			ScheduledAt:  tempOccurrence.ScheduledAt,
 			Status:       models.OccurrenceStatus(tempOccurrence.Status),
-			LastAttempt:  tempOccurrence.LastAttempt,
 			AttemptCount: tempOccurrence.AttemptCount,
-			CreatedAt:    tempOccurrence.CreatedAt,
-			UpdatedAt:    tempOccurrence.UpdatedAt,
+			Timestamp:    tempOccurrence.Timestamp,
+			StatusCode:   tempOccurrence.StatusCode,
+			ResponseBody: tempOccurrence.ResponseBody,
+			ErrorMessage: tempOccurrence.ErrorMessage,
+			StartedAt:    tempOccurrence.StartedAt,
+			CompletedAt:  tempOccurrence.CompletedAt,
 		}
 	}
 
 	return occurrences, total, nil
 }
 
-func (r *OccurrenceRepository) UpdateStatus(ctx context.Context, id uuid.UUID, status models.OccurrenceStatus) error {
-	log.Printf("Updating occurrence status: id=%s, status=%s", id, status)
-	// First check if the occurrence exists
-	var exists bool
-	err := r.db.GetContext(ctx, &exists, "SELECT EXISTS(SELECT 1 FROM occurrences WHERE id = $1)", id)
-	if err != nil {
-		log.Printf("Error checking occurrence existence: %v", err)
-		return fmt.Errorf("error checking occurrence existence: %w", err)
-	}
-	if !exists {
-		log.Printf("Occurrence not found for status update: %s", id)
-		return models.ErrOccurrenceNotFound
-	}
-
-	query := `
-		UPDATE occurrences SET
-			status = $1,
-			last_attempt = $2,
-			attempt_count = attempt_count + 1
-		WHERE id = $3`
-
-	result, err := r.db.ExecContext(ctx, query, status, time.Now(), id)
-	if err != nil {
-		log.Printf("Error updating occurrence status: %v", err)
-		return err
-	}
-	rows, _ := result.RowsAffected()
-	log.Printf("Updated occurrence status: id=%s, status=%s, rows=%d", id, status, rows)
-	return nil
-}
-
 func (r *OccurrenceRepository) Create(ctx context.Context, occurrence *models.Occurrence) error {
-	log.Printf("Creating occurrence: id=%s, event_id=%s, scheduled_at=%v",
-		occurrence.ID, occurrence.EventID, occurrence.ScheduledAt)
+	log.Printf("Creating occurrence: occurrence_id=%s, event_id=%s, scheduled_at=%v",
+		occurrence.OccurrenceID, occurrence.EventID, occurrence.ScheduledAt)
 	query := `
-		INSERT INTO occurrences (id, event_id, scheduled_at, status, last_attempt, attempt_count, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)`
+		INSERT INTO occurrences (occurrence_id, event_id, scheduled_at, status, attempt_count, timestamp, status_code, response_body, error_message, started_at, completed_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		RETURNING id, timestamp`
 
-	result, err := r.db.ExecContext(ctx, query,
-		occurrence.ID,
+	err := r.db.QueryRowContext(ctx, query,
+		occurrence.OccurrenceID,
 		occurrence.EventID,
 		occurrence.ScheduledAt,
 		occurrence.Status,
-		occurrence.LastAttempt,
 		occurrence.AttemptCount,
-		occurrence.CreatedAt,
-	)
+		occurrence.Timestamp,
+		occurrence.StatusCode,
+		occurrence.ResponseBody,
+		occurrence.ErrorMessage,
+		occurrence.StartedAt,
+		occurrence.CompletedAt,
+	).Scan(&occurrence.ID, &occurrence.Timestamp)
 	if err != nil {
 		log.Printf("Error creating occurrence: %v", err)
 		return err
 	}
-	rows, _ := result.RowsAffected()
-	log.Printf("Created occurrence: id=%s, rows=%d", occurrence.ID, rows)
+	log.Printf("Created occurrence: id=%d", occurrence.ID)
 	return nil
 }
 
 func (r *OccurrenceRepository) ListByEventID(ctx context.Context, eventID uuid.UUID) ([]models.Occurrence, error) {
 	query := `SELECT * FROM occurrences WHERE event_id = $1 ORDER BY scheduled_at DESC`
-	var occurrences []models.Occurrence
-	err := r.db.SelectContext(ctx, &occurrences, query, eventID)
-	return occurrences, err
-}
+	var tempOccurrences []struct {
+		ID           int       `db:"id"`
+		OccurrenceID uuid.UUID `db:"occurrence_id"`
+		EventID      uuid.UUID `db:"event_id"`
+		ScheduledAt  time.Time `db:"scheduled_at"`
+		Status       string    `db:"status"`
+		AttemptCount int       `db:"attempt_count"`
+		Timestamp    time.Time `db:"timestamp"`
+		StatusCode   int       `db:"status_code"`
+		ResponseBody string    `db:"response_body"`
+		ErrorMessage string    `db:"error_message"`
+		StartedAt    time.Time `db:"started_at"`
+		CompletedAt  time.Time `db:"completed_at"`
+	}
 
-func (r *OccurrenceRepository) Update(ctx context.Context, occurrence *models.Occurrence) error {
-	query := `
-		UPDATE occurrences SET
-			scheduled_at = $1,
-			status = $2,
-			last_attempt = $3,
-			attempt_count = $4,
-			updated_at = $5
-		WHERE id = $6`
-
-	_, err := r.db.ExecContext(ctx, query,
-		occurrence.ScheduledAt,
-		occurrence.Status,
-		occurrence.LastAttempt,
-		occurrence.AttemptCount,
-		time.Now(),
-		occurrence.ID,
-	)
-	return err
+	err := r.db.SelectContext(ctx, &tempOccurrences, query, eventID)
+	if err != nil {
+		return nil, err
+	}
+	occurrences := make([]models.Occurrence, len(tempOccurrences))
+	for i, tempOccurrence := range tempOccurrences {
+		occurrences[i] = models.Occurrence{
+			ID:           tempOccurrence.ID,
+			OccurrenceID: tempOccurrence.OccurrenceID,
+			EventID:      tempOccurrence.EventID,
+			ScheduledAt:  tempOccurrence.ScheduledAt,
+			Status:       models.OccurrenceStatus(tempOccurrence.Status),
+			AttemptCount: tempOccurrence.AttemptCount,
+			Timestamp:    tempOccurrence.Timestamp,
+			StatusCode:   tempOccurrence.StatusCode,
+			ResponseBody: tempOccurrence.ResponseBody,
+			ErrorMessage: tempOccurrence.ErrorMessage,
+			StartedAt:    tempOccurrence.StartedAt,
+			CompletedAt:  tempOccurrence.CompletedAt,
+		}
+	}
+	return occurrences, nil
 }
 
 // ExistsAtTime checks if an occurrence exists for a given event at a specific time
@@ -198,4 +191,15 @@ func (r *OccurrenceRepository) ExistsAtTime(ctx context.Context, eventID uuid.UU
 	}
 	log.Printf("Occurrence exists=%v for event_id=%s at time=%v", exists, eventID, scheduledAt)
 	return exists, err
+}
+
+// GetLatestByOccurrenceID fetches the latest occurrence row for a given OccurrenceID
+func (r *OccurrenceRepository) GetLatestByOccurrenceID(ctx context.Context, occurrenceID uuid.UUID) (*models.Occurrence, error) {
+	var occurrence models.Occurrence
+	query := `SELECT * FROM occurrences WHERE occurrence_id = $1 ORDER BY id DESC LIMIT 1`
+	err := r.db.GetContext(ctx, &occurrence, query, occurrenceID)
+	if err != nil {
+		return nil, err
+	}
+	return &occurrence, nil
 }

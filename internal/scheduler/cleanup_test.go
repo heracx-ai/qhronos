@@ -9,9 +9,9 @@ import (
 	"github.com/feedloop/qhronos/internal/repository"
 	"github.com/feedloop/qhronos/internal/testutils"
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/lib/pq"
 )
 
 func TestCleanupService(t *testing.T) {
@@ -57,11 +57,11 @@ func TestCleanupService(t *testing.T) {
 
 		// Create old occurrence
 		occurrence := &models.Occurrence{
-			ID:          uuid.New(),
-			EventID:     event.ID,
-			ScheduledAt: time.Now().Add(-48 * time.Hour),
-			Status:      models.OccurrenceStatusCompleted,
-			CreatedAt:   time.Now().Add(-48 * time.Hour),
+			OccurrenceID: uuid.New(),
+			EventID:      event.ID,
+			ScheduledAt:  time.Now().Add(-48 * time.Hour),
+			Status:       models.OccurrenceStatusCompleted,
+			Timestamp:    time.Now().Add(-48 * time.Hour),
 		}
 
 		// Create occurrence
@@ -100,7 +100,7 @@ func TestCleanupService(t *testing.T) {
 
 		// Create service with short interval
 		service := NewCleanupService(eventRepo, eventsRetention, occurrencesRetention, 50*time.Millisecond)
-		
+
 		// Run service
 		service.Run(ctx)
 	})
@@ -124,4 +124,4 @@ func TestCleanupService(t *testing.T) {
 		err := service.cleanup(ctx)
 		assert.NoError(t, err)
 	})
-} 
+}

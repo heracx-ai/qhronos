@@ -8,16 +8,17 @@ import (
 	"testing"
 	"time"
 
+	"bytes"
+
 	"github.com/feedloop/qhronos/internal/models"
 	"github.com/feedloop/qhronos/internal/repository"
 	"github.com/feedloop/qhronos/internal/services"
 	"github.com/feedloop/qhronos/internal/testutils"
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-	"github.com/lib/pq"
-	"bytes"
 )
 
 type MockHTTPClient struct {
@@ -74,17 +75,19 @@ func TestDispatcher(t *testing.T) {
 		err := eventRepo.Create(ctx, event)
 		require.NoError(t, err)
 
-		// Create test occurrence
+		// Create test occurrence (simulate scheduling in Redis only)
 		occurrence := &models.Occurrence{
-			ID:          uuid.New(),
-			EventID:     event.ID,
-			ScheduledAt: time.Now(),
-			Status:      models.OccurrenceStatusPending,
-			CreatedAt:   time.Now(),
+			OccurrenceID: uuid.New(),
+			EventID:      event.ID,
+			ScheduledAt:  time.Now(),
+			Status:       models.OccurrenceStatusPending,
+			Timestamp:    time.Now(),
+			StatusCode:   0,
+			ResponseBody: "",
+			ErrorMessage: "",
+			StartedAt:    time.Time{},
+			CompletedAt:  time.Time{},
 		}
-
-		err = occurrenceRepo.Create(ctx, occurrence)
-		require.NoError(t, err)
 
 		// Setup expectations
 		mockHTTP.On("Do", mock.AnythingOfType("*http.Request")).Return(&http.Response{
@@ -99,21 +102,27 @@ func TestDispatcher(t *testing.T) {
 		assert.NoError(t, err)
 		mockHTTP.AssertExpectations(t)
 
-		// Verify occurrence status
-		updatedOccurrence, err := occurrenceRepo.GetByID(ctx, occurrence.ID)
+		// Verify occurrence log in Postgres (append-only)
+		logged, err := occurrenceRepo.GetLatestByOccurrenceID(ctx, occurrence.OccurrenceID)
 		require.NoError(t, err)
-		assert.Equal(t, models.OccurrenceStatusCompleted, updatedOccurrence.Status)
+		require.NotNil(t, logged)
+		assert.Equal(t, models.OccurrenceStatusCompleted, logged.Status)
 	})
 
 	t.Run("event not found", func(t *testing.T) {
 		cleanup()
 		// Create test occurrence with non-existent event
 		occurrence := &models.Occurrence{
-			ID:          uuid.New(),
-			EventID:     uuid.New(),
-			ScheduledAt: time.Now(),
-			Status:      models.OccurrenceStatusPending,
-			CreatedAt:   time.Now(),
+			OccurrenceID: uuid.New(),
+			EventID:      uuid.New(),
+			ScheduledAt:  time.Now(),
+			Status:       models.OccurrenceStatusPending,
+			Timestamp:    time.Now(),
+			StatusCode:   0,
+			ResponseBody: "",
+			ErrorMessage: "",
+			StartedAt:    time.Time{},
+			CompletedAt:  time.Time{},
 		}
 
 		// Create a dummy event for the test
@@ -156,11 +165,16 @@ func TestDispatcher(t *testing.T) {
 		require.NoError(t, err)
 
 		occurrence := &models.Occurrence{
-			ID:          uuid.New(),
-			EventID:     event.ID,
-			ScheduledAt: time.Now(),
-			Status:      models.OccurrenceStatusPending,
-			CreatedAt:   time.Now(),
+			OccurrenceID: uuid.New(),
+			EventID:      event.ID,
+			ScheduledAt:  time.Now(),
+			Status:       models.OccurrenceStatusPending,
+			Timestamp:    time.Now(),
+			StatusCode:   0,
+			ResponseBody: "",
+			ErrorMessage: "",
+			StartedAt:    time.Time{},
+			CompletedAt:  time.Time{},
 		}
 
 		err = occurrenceRepo.Create(ctx, occurrence)
@@ -178,8 +192,8 @@ func TestDispatcher(t *testing.T) {
 		mockHTTP.AssertExpectations(t)
 
 		// Verify occurrence status
-		updatedOccurrence, err := occurrenceRepo.GetByID(ctx, occurrence.ID)
+		updatedOccurrence, err := occurrenceRepo.GetLatestByOccurrenceID(ctx, occurrence.OccurrenceID)
 		require.NoError(t, err)
 		assert.Equal(t, models.OccurrenceStatusFailed, updatedOccurrence.Status)
 	})
-} 
+}

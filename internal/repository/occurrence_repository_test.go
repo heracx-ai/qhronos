@@ -8,9 +8,9 @@ import (
 	"github.com/feedloop/qhronos/internal/models"
 	"github.com/feedloop/qhronos/internal/testutils"
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/lib/pq"
 )
 
 func TestOccurrenceRepository(t *testing.T) {
@@ -38,22 +38,21 @@ func TestOccurrenceRepository(t *testing.T) {
 				Interval:  1,
 				ByDay:     []string{"MO", "WE", "FR"},
 			},
-			Tags:        pq.StringArray{"test"},
-			Status:      models.EventStatusActive,
-			CreatedAt:   time.Now(),
+			Tags:      pq.StringArray{"test"},
+			Status:    models.EventStatusActive,
+			CreatedAt: time.Now(),
 		}
 
 		err := eventRepo.Create(context.Background(), event)
 		require.NoError(t, err)
 
 		occurrence := &models.Occurrence{
-			ID:           uuid.New(),
+			OccurrenceID: uuid.New(),
 			EventID:      event.ID,
 			ScheduledAt:  time.Now(),
 			Status:       models.OccurrenceStatusPending,
-			LastAttempt:  nil,
 			AttemptCount: 0,
-			CreatedAt:    time.Now(),
+			Timestamp:    time.Now(),
 		}
 
 		err = repo.Create(context.Background(), occurrence)
@@ -63,66 +62,11 @@ func TestOccurrenceRepository(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, retrieved)
 
-		assert.Equal(t, occurrence.ID, retrieved.ID)
+		assert.Equal(t, occurrence.OccurrenceID, retrieved.OccurrenceID)
 		assert.Equal(t, occurrence.EventID, retrieved.EventID)
 		assert.Equal(t, occurrence.ScheduledAt.Unix(), retrieved.ScheduledAt.Unix())
 		assert.Equal(t, occurrence.Status, retrieved.Status)
-		assert.Equal(t, occurrence.LastAttempt, retrieved.LastAttempt)
 		assert.Equal(t, occurrence.AttemptCount, retrieved.AttemptCount)
-	})
-
-	t.Run("Update Occurrence", func(t *testing.T) {
-		cleanup()
-		event := &models.Event{
-			ID:          uuid.New(),
-			Name:        "Test Event",
-			Description: "Test Description",
-			StartTime:   time.Now(),
-			WebhookURL:  "https://example.com/webhook",
-			Metadata:    []byte(`{"key": "value"}`),
-			Schedule: &models.ScheduleConfig{
-				Frequency: "weekly",
-				Interval:  1,
-				ByDay:     []string{"MO", "WE", "FR"},
-			},
-			Tags:        pq.StringArray{"test"},
-			Status:      models.EventStatusActive,
-			CreatedAt:   time.Now(),
-		}
-
-		err := eventRepo.Create(context.Background(), event)
-		require.NoError(t, err)
-
-		occurrence := &models.Occurrence{
-			ID:           uuid.New(),
-			EventID:      event.ID,
-			ScheduledAt:  time.Now(),
-			Status:       models.OccurrenceStatusPending,
-			LastAttempt:  nil,
-			AttemptCount: 0,
-			CreatedAt:    time.Now(),
-		}
-
-		err = repo.Create(context.Background(), occurrence)
-		require.NoError(t, err)
-
-		// Update occurrence
-		lastAttempt := time.Now()
-		occurrence.Status = models.OccurrenceStatusFailed
-		occurrence.LastAttempt = &lastAttempt
-		occurrence.AttemptCount = 1
-
-		err = repo.Update(context.Background(), occurrence)
-		require.NoError(t, err)
-
-		// Verify update
-		retrieved, err := repo.GetByID(context.Background(), occurrence.ID)
-		require.NoError(t, err)
-		require.NotNil(t, retrieved)
-
-		assert.Equal(t, models.OccurrenceStatusFailed, retrieved.Status)
-		assert.Equal(t, lastAttempt.Unix(), retrieved.LastAttempt.Unix())
-		assert.Equal(t, 1, retrieved.AttemptCount)
 	})
 
 	t.Run("List Occurrences by Event ID", func(t *testing.T) {
@@ -139,9 +83,9 @@ func TestOccurrenceRepository(t *testing.T) {
 				Interval:  1,
 				ByDay:     []string{"MO", "WE", "FR"},
 			},
-			Tags:        pq.StringArray{"test"},
-			Status:      models.EventStatusActive,
-			CreatedAt:   time.Now(),
+			Tags:      pq.StringArray{"test"},
+			Status:    models.EventStatusActive,
+			CreatedAt: time.Now(),
 		}
 
 		err := eventRepo.Create(context.Background(), event)
@@ -149,22 +93,20 @@ func TestOccurrenceRepository(t *testing.T) {
 
 		occurrences := []*models.Occurrence{
 			{
-				ID:           uuid.New(),
+				OccurrenceID: uuid.New(),
 				EventID:      event.ID,
 				ScheduledAt:  time.Now(),
 				Status:       models.OccurrenceStatusPending,
-				LastAttempt:  nil,
 				AttemptCount: 0,
-				CreatedAt:    time.Now(),
+				Timestamp:    time.Now(),
 			},
 			{
-				ID:           uuid.New(),
+				OccurrenceID: uuid.New(),
 				EventID:      event.ID,
 				ScheduledAt:  time.Now().Add(time.Hour),
 				Status:       models.OccurrenceStatusPending,
-				LastAttempt:  nil,
 				AttemptCount: 0,
-				CreatedAt:    time.Now(),
+				Timestamp:    time.Now(),
 			},
 		}
 
@@ -181,4 +123,4 @@ func TestOccurrenceRepository(t *testing.T) {
 			assert.Equal(t, event.ID, occ.EventID)
 		}
 	})
-} 
+}
