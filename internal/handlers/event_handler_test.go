@@ -343,6 +343,191 @@ func TestEventHandler(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 		assert.Contains(t, w.Body.String(), "error")
 	})
+
+	t.Run("Create Event Without Metadata", func(t *testing.T) {
+		cleanup()
+		req := map[string]interface{}{
+			"name":        "No Metadata Event",
+			"description": "Should default metadata to empty object",
+			"start_time":  time.Now().Format(time.RFC3339),
+			"webhook_url": "https://example.com/webhook",
+			"tags":        []string{"test"},
+		}
+		body, err := json.Marshal(req)
+		require.NoError(t, err)
+
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("POST", "/events", bytes.NewBuffer(body))
+		r.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(w, r)
+
+		assert.Equal(t, http.StatusCreated, w.Code)
+		var response models.Event
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.Equal(t, req["name"], response.Name)
+		assertJSONEqual(t, datatypes.JSON([]byte(`{}`)), response.Metadata)
+	})
+
+	t.Run("Create Event With Minimal Required Fields", func(t *testing.T) {
+		cleanup()
+		req := map[string]interface{}{
+			"name":        "Minimal Event",
+			"start_time":  time.Now().Format(time.RFC3339),
+			"webhook_url": "https://example.com/webhook",
+		}
+		body, err := json.Marshal(req)
+		require.NoError(t, err)
+
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("POST", "/events", bytes.NewBuffer(body))
+		r.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(w, r)
+
+		assert.Equal(t, http.StatusCreated, w.Code)
+		var response models.Event
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.Equal(t, req["name"], response.Name)
+		assertJSONEqual(t, datatypes.JSON([]byte(`{}`)), response.Metadata)
+	})
+
+	t.Run("Create Event With Invalid Data", func(t *testing.T) {
+		cleanup()
+		// Missing name
+		req := map[string]interface{}{
+			"start_time":  time.Now().Format(time.RFC3339),
+			"webhook_url": "https://example.com/webhook",
+		}
+		body, err := json.Marshal(req)
+		require.NoError(t, err)
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("POST", "/events", bytes.NewBuffer(body))
+		r.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(w, r)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+
+		// Invalid start_time
+		req = map[string]interface{}{
+			"name":        "Invalid StartTime",
+			"start_time":  "not-a-date",
+			"webhook_url": "https://example.com/webhook",
+		}
+		body, err = json.Marshal(req)
+		require.NoError(t, err)
+		w = httptest.NewRecorder()
+		r = httptest.NewRequest("POST", "/events", bytes.NewBuffer(body))
+		r.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(w, r)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	t.Run("Update Event With Partial Data", func(t *testing.T) {
+		cleanup()
+		// Create event
+		event := &models.Event{
+			ID:          uuid.New(),
+			Name:        "Partial Update Event",
+			Description: "Original Description",
+			StartTime:   time.Now(),
+			WebhookURL:  "https://example.com/webhook",
+			Metadata:    datatypes.JSON([]byte(`{"key": "value"}`)),
+			Tags:        pq.StringArray{"original"},
+			Status:      models.EventStatusActive,
+			CreatedAt:   time.Now(),
+		}
+		err := eventRepo.Create(context.Background(), event)
+		require.NoError(t, err)
+
+		updateReq := map[string]interface{}{
+			"description": "Updated Description",
+			"tags":        []string{"updated"},
+		}
+		body, err := json.Marshal(updateReq)
+		require.NoError(t, err)
+
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("PUT", "/events/"+event.ID.String(), bytes.NewBuffer(body))
+		r.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(w, r)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var response models.Event
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.Equal(t, "Updated Description", response.Description)
+		assert.ElementsMatch(t, []string{"updated"}, response.Tags)
+		assert.Equal(t, event.Name, response.Name)
+		assert.Equal(t, event.WebhookURL, response.WebhookURL)
+	})
+
+	t.Run("List Events By Tag", func(t *testing.T) {
+		cleanup()
+		// Create events with different tags
+		event1 := &models.Event{
+			ID:         uuid.New(),
+			Name:       "Tag Event 1",
+			StartTime:  time.Now(),
+			WebhookURL: "https://example.com/webhook",
+			Metadata:   datatypes.JSON([]byte(`{"key": "value1"}`)),
+			Tags:       pq.StringArray{"tag1"},
+			Status:     models.EventStatusActive,
+			CreatedAt:  time.Now(),
+		}
+		event2 := &models.Event{
+			ID:         uuid.New(),
+			Name:       "Tag Event 2",
+			StartTime:  time.Now(),
+			WebhookURL: "https://example.com/webhook",
+			Metadata:   datatypes.JSON([]byte(`{"key": "value2"}`)),
+			Tags:       pq.StringArray{"tag2"},
+			Status:     models.EventStatusActive,
+			CreatedAt:  time.Now(),
+		}
+		err := eventRepo.Create(context.Background(), event1)
+		require.NoError(t, err)
+		err = eventRepo.Create(context.Background(), event2)
+		require.NoError(t, err)
+
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("GET", "/events?tags=tag1", nil)
+		router.ServeHTTP(w, r)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var response []models.Event
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.Len(t, response, 1)
+		assert.Equal(t, "Tag Event 1", response[0].Name)
+	})
+
+	t.Run("Delete Event And Ensure Gone", func(t *testing.T) {
+		cleanup()
+		// Create event
+		event := &models.Event{
+			ID:         uuid.New(),
+			Name:       "Delete Me",
+			StartTime:  time.Now(),
+			WebhookURL: "https://example.com/webhook",
+			Metadata:   datatypes.JSON([]byte(`{"key": "value"}`)),
+			Tags:       pq.StringArray{"delete"},
+			Status:     models.EventStatusActive,
+			CreatedAt:  time.Now(),
+		}
+		err := eventRepo.Create(context.Background(), event)
+		require.NoError(t, err)
+
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("DELETE", "/events/"+event.ID.String(), nil)
+		router.ServeHTTP(w, r)
+		assert.Equal(t, http.StatusNoContent, w.Code)
+
+		// Try to get the deleted event
+		w = httptest.NewRecorder()
+		r = httptest.NewRequest("GET", "/events/"+event.ID.String(), nil)
+		router.ServeHTTP(w, r)
+		assert.Equal(t, http.StatusNotFound, w.Code)
+	})
 }
 
 func stringPtr(s string) *string {

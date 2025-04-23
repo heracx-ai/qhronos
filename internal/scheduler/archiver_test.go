@@ -61,11 +61,14 @@ func TestArchivalScheduler(t *testing.T) {
 	// Start the archival scheduler with a short check period
 	archivalStopCh := make(chan struct{})
 	retention := config.RetentionConfig{
-		Events:      24 * time.Hour,
-		Occurrences: 24 * time.Hour,
+		Events:          "1d",
+		Occurrences:     "1d",
+		CleanupInterval: "1h",
 	}
+	durations, err := (&config.Config{Retention: retention}).ParseRetentionDurations()
+	require.NoError(t, err)
 	checkPeriod := 2 * time.Second
-	StartArchivalScheduler(db, checkPeriod, retention, archivalStopCh)
+	StartArchivalScheduler(db, checkPeriod, *durations, archivalStopCh)
 
 	// Also call the archival function directly for immediate effect
 	_, err = db.ExecContext(ctx, "SELECT archive_old_data($1)", "24 hours")

@@ -29,6 +29,12 @@ func main() {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
 
+	// After loading cfg and before calling StartArchivalScheduler
+	durations, err := cfg.ParseRetentionDurations()
+	if err != nil {
+		log.Fatalf("Failed to parse retention durations: %v", err)
+	}
+
 	// Initialize database connection
 	db, err := database.Connect(cfg.Database.ToDBConfig())
 	if err != nil {
@@ -85,7 +91,7 @@ func main() {
 
 	// Start archival scheduler in background
 	archivalStopCh := make(chan struct{})
-	scheduler.StartArchivalScheduler(db, cfg.Archival.CheckPeriod, cfg.Retention, archivalStopCh)
+	scheduler.StartArchivalScheduler(db, cfg.Archival.CheckPeriod, *durations, archivalStopCh)
 
 	// Start scheduler services in background
 	ctx := context.Background()

@@ -49,13 +49,13 @@ func updateLastArchivalTime(db *sqlx.DB) error {
 	return err
 }
 
-func syncRetentionConfigToDB(db *sqlx.DB, retention config.RetentionConfig) error {
+func syncRetentionConfigToDB(db *sqlx.DB, durations config.RetentionDurations) error {
 	value := map[string]interface{}{
 		"events": map[string]interface{}{
-			"max_past_occurrences": retention.Events.String(),
+			"max_past_occurrences": durations.Events.String(),
 		},
 		"occurrences": map[string]interface{}{
-			"max_past_occurrences": retention.Occurrences.String(),
+			"max_past_occurrences": durations.Occurrences.String(),
 		},
 	}
 	valueJSON, err := json.Marshal(value)
@@ -70,9 +70,9 @@ func syncRetentionConfigToDB(db *sqlx.DB, retention config.RetentionConfig) erro
 	return err
 }
 
-func StartArchivalScheduler(db *sqlx.DB, checkPeriod time.Duration, retention config.RetentionConfig, stopCh <-chan struct{}) {
+func StartArchivalScheduler(db *sqlx.DB, checkPeriod time.Duration, durations config.RetentionDurations, stopCh <-chan struct{}) {
 	// Sync retention config on startup
-	if err := syncRetentionConfigToDB(db, retention); err != nil {
+	if err := syncRetentionConfigToDB(db, durations); err != nil {
 		log.Printf("[archiver] Failed to sync retention config: %v", err)
 	}
 	ticker := time.NewTicker(checkPeriod)
@@ -101,7 +101,7 @@ func StartArchivalScheduler(db *sqlx.DB, checkPeriod time.Duration, retention co
 					releaseArchiveLock(db)
 					continue
 				}
-				_, err = db.Exec("SELECT archive_old_data($1)", retention.Events.String())
+				_, err = db.Exec("SELECT archive_old_data($1)", durations.Events.String())
 				if err != nil {
 					log.Printf("[archiver] Error running archive_old_data: %v", err)
 					releaseArchiveLock(db)

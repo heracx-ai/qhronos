@@ -59,9 +59,15 @@ type SchedulerConfig struct {
 }
 
 type RetentionConfig struct {
-	Events          time.Duration `mapstructure:"events"`
-	Occurrences     time.Duration `mapstructure:"occurrences"`
-	CleanupInterval time.Duration `mapstructure:"cleanup_interval"`
+	Events          string `mapstructure:"events"`
+	Occurrences     string `mapstructure:"occurrences"`
+	CleanupInterval string `mapstructure:"cleanup_interval"`
+}
+
+type RetentionDurations struct {
+	Events          time.Duration
+	Occurrences     time.Duration
+	CleanupInterval time.Duration
 }
 
 func Load() (*Config, error) {
@@ -119,4 +125,52 @@ func (c DatabaseConfig) ToDBConfig() database.Config {
 		DBName:   c.DBName,
 		SSLMode:  c.SSLMode,
 	}
+}
+
+// ParseRetentionDurations parses the string fields in RetentionConfig into time.Duration values.
+func (c *Config) ParseRetentionDurations() (*RetentionDurations, error) {
+	events, err := ParseFlexibleDuration(c.Retention.Events)
+	if err != nil {
+		return nil, fmt.Errorf("invalid retention.events: %w", err)
+	}
+	occurrences, err := ParseFlexibleDuration(c.Retention.Occurrences)
+	if err != nil {
+		return nil, fmt.Errorf("invalid retention.occurrences: %w", err)
+	}
+	cleanup, err := ParseFlexibleDuration(c.Retention.CleanupInterval)
+	if err != nil {
+		return nil, fmt.Errorf("invalid retention.cleanup_interval: %w", err)
+	}
+	return &RetentionDurations{
+		Events:          events,
+		Occurrences:     occurrences,
+		CleanupInterval: cleanup,
+	}, nil
+}
+
+// ParseFlexibleDuration parses a duration string supporting 'd' (days) and 'w' (weeks) in addition to standard units.
+func ParseFlexibleDuration(s string) (time.Duration, error) {
+	if len(s) == 0 {
+		return 0, fmt.Errorf("empty duration string")
+	}
+	// Check for 'd' (days) and 'w' (weeks) at the end
+	if len(s) > 1 {
+		suffix := s[len(s)-1:]
+		value := s[:len(s)-1]
+		switch suffix {
+		case "d":
+			n, err := time.ParseDuration(value + "h")
+			if err != nil {
+				return 0, err
+			}
+			return n * 24, nil
+		case "w":
+			n, err := time.ParseDuration(value + "h")
+			if err != nil {
+				return 0, err
+			}
+			return n * 24 * 7, nil
+		}
+	}
+	return time.ParseDuration(s)
 }

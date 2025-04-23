@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/lib/pq"
+	"gorm.io/datatypes"
 )
 
 type EventHandler struct {
@@ -40,9 +41,14 @@ func (h *EventHandler) CreateEvent(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "start_time is required"})
 		return
 	}
+	// Default metadata to empty object if not provided
 	if req.Metadata == nil || len(req.Metadata) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "metadata is required"})
-		return
+		emptyJSON := datatypes.JSON([]byte("{}"))
+		req.Metadata = emptyJSON
+	}
+	// Default tags to empty array if not provided
+	if req.Tags == nil {
+		req.Tags = []string{}
 	}
 
 	// Validate schedule format if provided
@@ -78,11 +84,11 @@ func (h *EventHandler) GetEvent(c *gin.Context) {
 
 	event, err := h.repo.GetByID(c, id)
 	if err != nil {
-		if err == models.ErrEventNotFound {
-			c.JSON(http.StatusNotFound, gin.H{"error": "event not found"})
-			return
-		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if event == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "event not found"})
 		return
 	}
 
