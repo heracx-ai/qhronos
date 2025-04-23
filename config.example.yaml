@@ -16,4 +16,11 @@ redis:
 
 auth:
   master_token: "your-master-token-here"
-  jwt_secret: "your-jwt-secret-here" 
+  jwt_secret: "your-jwt-secret-here"
+
+archival:
+  check_period: 1h 
+
+retention:
+  events: 30d
+  occurrences: 7d 

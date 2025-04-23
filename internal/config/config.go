@@ -8,6 +8,10 @@ import (
 	"github.com/spf13/viper"
 )
 
+type ArchivalConfig struct {
+	CheckPeriod time.Duration `mapstructure:"check_period"`
+}
+
 type Config struct {
 	Server    ServerConfig    `mapstructure:"server"`
 	Database  DatabaseConfig  `mapstructure:"database"`
@@ -16,6 +20,7 @@ type Config struct {
 	HMAC      HMACConfig      `mapstructure:"hmac"`
 	Scheduler SchedulerConfig `mapstructure:"scheduler"`
 	Retention RetentionConfig `mapstructure:"retention"`
+	Archival  ArchivalConfig  `mapstructure:"archival"`
 }
 
 type ServerConfig struct {
@@ -54,8 +59,8 @@ type SchedulerConfig struct {
 }
 
 type RetentionConfig struct {
-	Events     time.Duration `mapstructure:"events"`
-	Occurrences time.Duration `mapstructure:"occurrences"`
+	Events          time.Duration `mapstructure:"events"`
+	Occurrences     time.Duration `mapstructure:"occurrences"`
 	CleanupInterval time.Duration `mapstructure:"cleanup_interval"`
 }
 
@@ -84,6 +89,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("retention.events", "30d")
 	viper.SetDefault("retention.occurrences", "7d")
 	viper.SetDefault("retention.cleanup_interval", "1h")
+	viper.SetDefault("archival.check_period", "1h")
 
 	// Read environment variables
 	viper.AutomaticEnv()
@@ -113,4 +119,4 @@ func (c DatabaseConfig) ToDBConfig() database.Config {
 		DBName:   c.DBName,
 		SSLMode:  c.SSLMode,
 	}
-} 
+}

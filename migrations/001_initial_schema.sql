@@ -142,33 +142,37 @@ CREATE TABLE performance_metrics (
 
 -- Archived events
 CREATE TABLE archived_events (
-    id UUID PRIMARY KEY,
+    id SERIAL PRIMARY KEY,
+    event_id UUID NOT NULL,
     name TEXT NOT NULL,
     description TEXT,
     start_time TIMESTAMPTZ NOT NULL,
     webhook_url TEXT NOT NULL,
-    metadata JSONB NOT NULL,
+    metadata JSONB NOT NULL DEFAULT '{}',
     schedule JSONB,
-    tags TEXT[],
-    status TEXT,
-    created_at TIMESTAMPTZ,
+    tags TEXT[] NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'active',
+    hmac_secret TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ,
-    archived_at TIMESTAMPTZ NOT NULL,
-    original_event_id UUID NOT NULL
+    archived_at TIMESTAMPTZ NOT NULL
 );
 
 -- Archived occurrences
 CREATE TABLE archived_occurrences (
-    id UUID PRIMARY KEY,
+    id SERIAL PRIMARY KEY,
+    occurrence_id UUID NOT NULL,
     event_id UUID NOT NULL,
     scheduled_at TIMESTAMPTZ NOT NULL,
-    status TEXT,
-    last_attempt TIMESTAMPTZ,
-    attempt_count INT,
-    created_at TIMESTAMPTZ,
-    updated_at TIMESTAMPTZ,
-    archived_at TIMESTAMPTZ NOT NULL,
-    original_occurrence_id UUID NOT NULL
+    status TEXT NOT NULL,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    status_code INT,
+    response_body TEXT,
+    error_message TEXT,
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    archived_at TIMESTAMPTZ NOT NULL
 );
 
 -- Create Indexes
@@ -188,35 +192,30 @@ CREATE INDEX idx_performance_metrics_timestamp ON performance_metrics(timestamp)
 -- Data Retention Management Functions
 
 -- Function to archive old data
-CREATE OR REPLACE FUNCTION archive_old_data()
+CREATE OR REPLACE FUNCTION archive_old_data(event_retention INTERVAL)
 RETURNS void AS $$
-DECLARE
-    retention_policies JSONB;
-    webhook_retention INTERVAL;
-    event_retention INTERVAL;
-    analytics_retention INTERVAL;
 BEGIN
-    -- Get retention policies
-    SELECT value INTO retention_policies
-    FROM system_config
-    WHERE key = 'retention_policies';
-
-    -- Archive old events and occurrences
-    event_retention := (retention_policies->'events'->>'max_past_occurrences')::INTERVAL;
-    
-    -- First archive occurrences
-    INSERT INTO archived_occurrences
+    -- Archive old occurrences (do not specify SERIAL id)
+    INSERT INTO archived_occurrences (
+        occurrence_id, event_id, scheduled_at, status, attempt_count,
+        timestamp, status_code, response_body, error_message,
+        started_at, completed_at, archived_at
+    )
     SELECT 
-        id, event_id, scheduled_at, status, last_attempt,
-        attempt_count, created_at, updated_at, now(), id
+        occurrence_id, event_id, scheduled_at, status, attempt_count,
+        timestamp, status_code, response_body, error_message,
+        started_at, completed_at, now()
     FROM occurrences
     WHERE scheduled_at < (now() - event_retention);
 
-    -- Then archive events that have no active occurrences
-    INSERT INTO archived_events
+    -- Archive events that have no active occurrences (do not specify SERIAL id)
+    INSERT INTO archived_events (
+        event_id, name, description, start_time, webhook_url, metadata,
+        schedule, tags, status, hmac_secret, created_at, updated_at, archived_at
+    )
     SELECT 
         id, name, description, start_time, webhook_url, metadata,
-        schedule, tags, status, created_at, updated_at, now(), id
+        schedule, tags, status, hmac_secret, created_at, updated_at, now()
     FROM events e
     WHERE NOT EXISTS (
         SELECT 1 FROM occurrences o 

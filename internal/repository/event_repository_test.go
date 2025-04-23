@@ -530,3 +530,63 @@ func assertJSONEqual(t *testing.T, expected, actual datatypes.JSON) {
 	assert.NoError(t, err2)
 	assert.Equal(t, expectedMap, actualMap)
 }
+
+func TestArchiveOldData(t *testing.T) {
+	db := setupTestDB(t)
+	ctx := context.Background()
+
+	// Insert an old event and occurrence
+	oldEvent := &models.Event{
+		ID:          uuid.New(),
+		Name:        "Old Event",
+		Description: "Should be archived",
+		StartTime:   time.Now().Add(-48 * time.Hour),
+		WebhookURL:  "https://example.com/webhook",
+		Metadata:    datatypes.JSON([]byte(`{"key": "value"}`)),
+		Schedule:    &models.ScheduleConfig{Frequency: "daily", Interval: 1},
+		Tags:        pq.StringArray{"archive"},
+		Status:      models.EventStatusActive,
+		CreatedAt:   time.Now().Add(-48 * time.Hour),
+	}
+	eventRepo := NewEventRepository(db)
+	err := eventRepo.Create(ctx, oldEvent)
+	require.NoError(t, err)
+
+	oldOccurrence := &models.Occurrence{
+		OccurrenceID: uuid.New(),
+		EventID:      oldEvent.ID,
+		ScheduledAt:  time.Now().Add(-48 * time.Hour),
+		Status:       models.OccurrenceStatusCompleted,
+		AttemptCount: 1,
+		Timestamp:    time.Now().Add(-48 * time.Hour),
+		StatusCode:   200,
+		ResponseBody: "ok",
+		ErrorMessage: "",
+		StartedAt:    time.Now().Add(-48 * time.Hour),
+		CompletedAt:  time.Now().Add(-47 * time.Hour),
+	}
+	occRepo := NewOccurrenceRepository(db)
+	err = occRepo.Create(ctx, oldOccurrence)
+	require.NoError(t, err)
+
+	// Call the archival function
+	_, err = db.ExecContext(ctx, "SELECT archive_old_data($1)", "24 hours")
+	require.NoError(t, err)
+
+	// Check that the old event and occurrence are gone from main tables
+	e, err := eventRepo.GetByID(ctx, oldEvent.ID)
+	assert.Nil(t, e)
+	o, err := occRepo.GetLatestByOccurrenceID(ctx, oldOccurrence.OccurrenceID)
+	assert.Nil(t, o)
+
+	// Check that the event and occurrence are present in the archive tables
+	var archivedEventCount int
+	err = db.GetContext(ctx, &archivedEventCount, "SELECT COUNT(*) FROM archived_events WHERE event_id = $1", oldEvent.ID)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, archivedEventCount)
+
+	var archivedOccurrenceCount int
+	err = db.GetContext(ctx, &archivedOccurrenceCount, "SELECT COUNT(*) FROM archived_occurrences WHERE occurrence_id = $1", oldOccurrence.OccurrenceID)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, archivedOccurrenceCount)
+}
