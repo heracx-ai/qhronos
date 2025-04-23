@@ -98,6 +98,43 @@ curl -X POST http://localhost:8080/events \
   }'
 ```
 
+## Schedule Parameter Tutorial
+
+The `schedule` parameter in event creation allows you to define recurring or one-time schedules using a flexible JSON structure. Here are the most common use cases:
+
+### 1. One-Time Event (No Recurrence)
+If you omit the `schedule` field, the event will be scheduled only once at the specified `start_time`:
+```json
+{
+  "name": "One-Time Event",
+  "description": "This event happens only once.",
+  "start_time": "2024-05-01T10:00:00Z",
+  "webhook_url": "https://example.com/webhook",
+  "metadata": {},
+  "tags": ["single"]
+  // No "schedule" field!
+}
+```
+
+### 2. Daily Recurring Event
+```json
+"schedule": {
+  "frequency": "daily"
+}
+```
+This schedules the event to occur every day. (If `interval` is omitted, it defaults to 1.)
+
+### 3. Weekly Recurring Event (e.g., every Monday and Friday)
+```json
+"schedule": {
+  "frequency": "weekly",
+  "by_day": ["MO", "FR"]
+}
+```
+This schedules the event to occur every Monday and Friday.
+
+**Tip:** Omitting the `schedule` field results in a one-time event. For recurring events, specify the `schedule` field as shown above.
+
 ## Configuration
 - Copy `config.example.yaml` to `config.yaml` and edit as needed.
 - Or set environment variables to override config values.
