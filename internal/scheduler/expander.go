@@ -3,12 +3,12 @@ package scheduler
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/feedloop/qhronos/internal/models"
 	"github.com/feedloop/qhronos/internal/repository"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 )
 
 type Expander struct {
@@ -17,6 +17,7 @@ type Expander struct {
 	occurrenceRepo    *repository.OccurrenceRepository
 	lookAheadDuration time.Duration
 	expansionInterval time.Duration
+	logger            *zap.Logger
 }
 
 // NewExpander creates a new Expander with configurable look-ahead duration and expansion interval
@@ -26,49 +27,49 @@ func NewExpander(
 	occurrenceRepo *repository.OccurrenceRepository,
 	lookAheadDuration time.Duration,
 	expansionInterval time.Duration,
+	logger *zap.Logger,
 ) *Expander {
-	log.Printf("Initializing Expander with lookAheadDuration=%v, expansionInterval=%v",
-		lookAheadDuration, expansionInterval)
+	logger.Debug("Initializing Expander", zap.Duration("lookAheadDuration", lookAheadDuration), zap.Duration("expansionInterval", expansionInterval))
 	return &Expander{
 		scheduler:         scheduler,
 		eventRepo:         eventRepo,
 		occurrenceRepo:    occurrenceRepo,
 		lookAheadDuration: lookAheadDuration,
 		expansionInterval: expansionInterval,
+		logger:            logger,
 	}
 }
 
 // ExpandEvents expands both recurring and non-recurring events into occurrences
 func (e *Expander) ExpandEvents(ctx context.Context) error {
-	log.Printf("Starting event expansion with look-ahead duration: %v", e.lookAheadDuration)
+	e.logger.Debug("Starting event expansion", zap.Duration("lookAheadDuration", e.lookAheadDuration))
 
 	// Get active events
 	events, err := e.eventRepo.ListActive(ctx)
 	if err != nil {
-		log.Printf("Error getting active events: %v", err)
+		e.logger.Error("Error getting active events", zap.Error(err))
 		return fmt.Errorf("failed to get active events: %w", err)
 	}
-	log.Printf("Found %d active events to expand", len(events))
+	e.logger.Debug("Found active events to expand", zap.Int("count", len(events)))
 
 	for _, event := range events {
-		log.Printf("Processing event: id=%s, name=%s", event.ID, event.Name)
+		e.logger.Debug("Processing event", zap.String("event_id", event.ID.String()), zap.String("name", event.Name))
 
 		// Handle recurring events
 		if event.Schedule != nil {
 			if err := e.expandRecurringEvent(ctx, event); err != nil {
-				log.Printf("Error expanding recurring event %s: %v", event.ID, err)
+				e.logger.Error("Error expanding recurring event", zap.String("event_id", event.ID.String()), zap.Error(err))
 				continue
 			}
 		} else {
 			// Handle non-recurring events
 			if err := e.expandNonRecurringEvent(ctx, event); err != nil {
-				log.Printf("Error expanding non-recurring event %s: %v", event.ID, err)
+				e.logger.Error("Error expanding non-recurring event", zap.String("event_id", event.ID.String()), zap.Error(err))
 				continue
 			}
 		}
 	}
-
-	log.Printf("Completed event expansion")
+	e.logger.Debug("Completed event expansion")
 	return nil
 }
 
@@ -91,11 +92,13 @@ func (e *Expander) scheduleWithRetry(ctx context.Context, occurrence *models.Occ
 				continue
 			}
 		} else {
-			log.Printf("Failed to schedule occurrence in Redis (non-retryable): %v", err)
+			e.logger.Error("Failed to schedule occurrence in Redis (non-retryable)", zap.Error(err))
 			return
 		}
 	}
-	log.Printf("Failed to schedule occurrence in Redis after retries: %v", lastErr)
+	if lastErr != nil {
+		e.logger.Error("Failed to schedule occurrence in Redis after retries", zap.Error(lastErr))
+	}
 }
 
 // isRedisTimeoutOrConnError checks if the error string indicates a timeout or connection error
@@ -109,7 +112,7 @@ func contains(s, substr string) bool {
 }
 
 func (e *Expander) expandRecurringEvent(ctx context.Context, event *models.Event) error {
-	log.Printf("Expanding recurring event: id=%s", event.ID)
+	e.logger.Debug("Expanding recurring event", zap.String("event_id", event.ID.String()))
 
 	// Get next occurrences based on schedule configuration
 	now := time.Now().UTC()
@@ -211,7 +214,7 @@ func (e *Expander) expandRecurringEvent(ctx context.Context, event *models.Event
 		occurrences = filteredOccurrences
 	}
 
-	log.Printf("Found %d future occurrences for event %s", len(occurrences), event.ID)
+	e.logger.Debug("Found future occurrences for event", zap.String("event_id", event.ID.String()), zap.Int("count", len(occurrences)))
 
 	for _, t := range occurrences {
 		occurrence := &models.Occurrence{
@@ -228,23 +231,19 @@ func (e *Expander) expandRecurringEvent(ctx context.Context, event *models.Event
 }
 
 func (e *Expander) expandNonRecurringEvent(ctx context.Context, event *models.Event) error {
-	log.Printf("Expanding non-recurring event: id=%s", event.ID)
+	e.logger.Debug("Expanding non-recurring event", zap.String("event_id", event.ID.String()))
 
-	if event.Schedule == nil {
-		return fmt.Errorf("event schedule is nil")
+	// For non-recurring events, Schedule should be nil. If not, log a warning but proceed.
+	if event.Schedule != nil {
+		e.logger.Warn("Non-recurring event has a non-nil schedule; ignoring schedule", zap.String("event_id", event.ID.String()))
 	}
 
 	now := time.Now().UTC()
 	startTime := event.StartTime.UTC()
 
-	if startTime.Before(now) {
-		log.Printf("Event %s is in the past, skipping", event.ID)
-		return nil
-	}
-
 	endTime := now.Add(e.lookAheadDuration)
 	if startTime.After(endTime) {
-		log.Printf("Event %s is beyond look-ahead window, skipping", event.ID)
+		e.logger.Info("Event is beyond look-ahead window, skipping", zap.String("event_id", event.ID.String()))
 		return nil
 	}
 
@@ -262,18 +261,18 @@ func (e *Expander) expandNonRecurringEvent(ctx context.Context, event *models.Ev
 
 // Run starts the expander in a loop
 func (e *Expander) Run(ctx context.Context) error {
-	log.Printf("Starting Expander service with interval %v", e.expansionInterval)
+	e.logger.Info("Starting Expander service", zap.Duration("interval", e.expansionInterval))
 	ticker := time.NewTicker(e.expansionInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("Expander service shutting down")
+			e.logger.Info("Expander service shutting down")
 			return ctx.Err()
 		case <-ticker.C:
 			if err := e.ExpandEvents(ctx); err != nil {
-				log.Printf("Error during event expansion: %v", err)
+				e.logger.Error("Error during event expansion", zap.Error(err))
 			}
 		}
 	}
