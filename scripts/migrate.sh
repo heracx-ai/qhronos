@@ -78,7 +78,39 @@ elif [ "$MODE" == "down" ]; then
     done
     echo "Rollback complete."
     exit 0
+elif [ "$MODE" == "clean-slate" ]; then
+    DB_EXISTS=$(docker exec $CONTAINER_ID psql -U postgres -tAc "SELECT 1 FROM pg_database WHERE datname='qhronos';")
+    if [ "$DB_EXISTS" == "1" ]; then
+        echo "Dropping all user-defined functions in public schema..."
+        docker exec -i $CONTAINER_ID psql -U postgres -d qhronos <<'EOF'
+DO $$
+DECLARE
+    r RECORD;
+BEGIN
+    FOR r IN (
+        SELECT n.nspname as function_schema,
+               p.proname as function_name,
+               pg_get_function_identity_arguments(p.oid) as args
+        FROM pg_proc p
+        JOIN pg_namespace n ON p.pronamespace = n.oid
+        WHERE n.nspname = 'public'
+          AND p.prokind = 'f'
+    )
+    LOOP
+        EXECUTE 'DROP FUNCTION IF EXISTS ' || r.function_schema || '.' || r.function_name || '(' || r.args || ') CASCADE';
+    END LOOP;
+END
+$$;
+EOF
+    else
+        echo "Database qhronos does not exist, skipping function drop."
+    fi
+    echo "Dropping and recreating qhronos database..."
+    docker exec $CONTAINER_ID psql -U postgres -c "DROP DATABASE IF EXISTS qhronos;"
+    docker exec $CONTAINER_ID psql -U postgres -c "CREATE DATABASE qhronos;"
+    echo "Clean slate complete. Database and functions dropped/recreated. Run 'make migrate-up' to apply migrations."
+    exit 0
 else
-    echo "Usage: $0 up [N] | down [N]"
+    echo "Usage: $0 up [N] | down [N] | clean-slate"
     exit 1
 fi 

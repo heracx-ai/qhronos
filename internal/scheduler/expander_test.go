@@ -86,7 +86,9 @@ func TestEventExpander(t *testing.T) {
 
 		// Verify at least one occurrence was created
 		var occurrence models.Occurrence
-		err = json.Unmarshal([]byte(results[0]), &occurrence)
+		data, err := redisClient.HGet(ctx, "schedule:data", results[0]).Result()
+		require.NoError(t, err)
+		err = json.Unmarshal([]byte(data), &occurrence)
 		require.NoError(t, err)
 		assert.Equal(t, event.ID, occurrence.EventID)
 	})
@@ -133,7 +135,9 @@ func TestEventExpander(t *testing.T) {
 
 		// Verify the occurrence is for the correct event and scheduled at the correct time
 		var occurrence models.Occurrence
-		err = json.Unmarshal([]byte(results[0]), &occurrence)
+		data, err := redisClient.HGet(ctx, "schedule:data", results[0]).Result()
+		require.NoError(t, err)
+		err = json.Unmarshal([]byte(data), &occurrence)
 		require.NoError(t, err)
 		assert.Equal(t, event.ID, occurrence.EventID)
 		assert.Equal(t, event.StartTime.Unix(), occurrence.ScheduledAt.Unix())
@@ -169,7 +173,9 @@ func TestEventExpander(t *testing.T) {
 
 		// Verify the occurrence is for the correct event and scheduled at the correct time
 		var occurrence models.Occurrence
-		err = json.Unmarshal([]byte(results[0]), &occurrence)
+		data, err := redisClient.HGet(ctx, "schedule:data", results[0]).Result()
+		require.NoError(t, err)
+		err = json.Unmarshal([]byte(data), &occurrence)
 		require.NoError(t, err)
 		assert.Equal(t, event.ID, occurrence.EventID)
 		assert.Equal(t, startTime.Unix(), occurrence.ScheduledAt.Unix())

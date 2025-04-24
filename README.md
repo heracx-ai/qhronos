@@ -24,6 +24,11 @@ See [docs/api.md](docs/api.md) for full API details and example requests/respons
 ## Overview
 Qhronos (v0.1.0) is a developer-first scheduling and notification platform. It lets you schedule one-time or recurring events and reliably delivers webhooks at the right time. Built for reliability, security, and extensibility, Qhronos is ideal for automating workflows, orchestrating AI agents, and managing time-based triggers in distributed systems.
 
+**Event → Schedule → Occurrence Flow:**
+- **Event:** User-defined intent and configuration, stored in the database.
+- **Schedule:** Actionable plan (stored in Redis) for when the event should be executed. Created by the expander.
+- **Occurrence:** Created only after a scheduled event is executed (dispatched by the dispatcher). Represents the actual attempt to process (dispatch) the event at a specific time, with status and result information.
+
 For system architecture and in-depth design, see [design.md](./design.md).
 
 ## Features
@@ -227,3 +232,6 @@ Qhronos supports JWT (JSON Web Token) authentication for secure, scoped API acce
       "expires_at": "2024-12-31T23:59:59Z"
     }'
   ```
+
+### Occurrences
+An **Occurrence** represents a single execution attempt of an event, created only after a scheduled event (from Redis) is executed by the dispatcher. For recurring events, multiple occurrences are generated as each scheduled execution is processed. Each occurrence tracks its status, attempts, and delivery history.

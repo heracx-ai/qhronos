@@ -246,9 +246,11 @@ func TestScheduler(t *testing.T) {
 
 		// Unmarshal Redis results
 		redisSchedMap := make(map[string]time.Time)
-		for _, res := range results {
+		for _, key := range results {
+			data, err := redisClient.HGet(ctx, "schedule:data", key).Result()
+			require.NoError(t, err)
 			var sched models.Schedule
-			err := json.Unmarshal([]byte(res), &sched)
+			err = json.Unmarshal([]byte(data), &sched)
 			require.NoError(t, err)
 			redisSchedMap[sched.OccurrenceID.String()] = sched.ScheduledAt
 		}
@@ -274,5 +276,48 @@ func TestScheduler(t *testing.T) {
 			assert.True(t, found, "Occurrence %s in Redis not found in DB", id)
 			assert.Equal(t, dbSched.Unix(), sched.Unix(), "ScheduledAt mismatch for occurrence %s", id)
 		}
+	})
+
+	t.Run("idempotent scheduling prevents duplicates", func(t *testing.T) {
+		cleanup()
+		event := &models.Event{
+			ID:          uuid.New(),
+			Name:        "Idempotent Event",
+			Description: "Should not be scheduled twice",
+			StartTime:   time.Now().Add(1 * time.Hour),
+			Webhook:     "http://example.com",
+			Status:      models.EventStatusActive,
+			Metadata:    datatypes.JSON([]byte(`{"key": "value"}`)),
+			Schedule: &models.ScheduleConfig{
+				Frequency: "daily",
+				Interval:  1,
+			},
+			Tags:      pq.StringArray{"test"},
+			CreatedAt: time.Now(),
+		}
+		err := eventRepo.Create(context.Background(), event)
+		require.NoError(t, err)
+
+		scheduledAt := event.StartTime
+		occ := &models.Occurrence{
+			OccurrenceID: uuid.New(),
+			EventID:      event.ID,
+			ScheduledAt:  scheduledAt,
+			Status:       models.OccurrenceStatusPending,
+			Timestamp:    time.Now(),
+		}
+		err = occurrenceRepo.Create(context.Background(), occ)
+		require.NoError(t, err)
+
+		// Schedule the same event/time twice
+		err = scheduler.ScheduleEvent(context.Background(), occ, event)
+		require.NoError(t, err)
+		err = scheduler.ScheduleEvent(context.Background(), occ, event)
+		require.NoError(t, err)
+
+		// There should be only one schedule in Redis
+		keys, err := redisClient.ZRange(context.Background(), scheduleKey, 0, -1).Result()
+		require.NoError(t, err)
+		assert.Len(t, keys, 1)
 	})
 }

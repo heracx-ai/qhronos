@@ -31,9 +31,21 @@ func NewScheduler(redis *redis.Client, logger *zap.Logger) *Scheduler {
 	}
 }
 
-// ScheduleEvent schedules a single event occurrence
+// ScheduleEvent schedules a single event occurrence using idempotent deterministic keys
 func (s *Scheduler) ScheduleEvent(ctx context.Context, occurrence *models.Occurrence, event *models.Event) error {
-	// Combine occurrence and event fields into Schedule
+	// Compose deterministic key
+	key := fmt.Sprintf("schedule:%s:%d", event.ID.String(), occurrence.ScheduledAt.Unix())
+
+	// Check if already scheduled
+	exists, err := s.redis.HExists(ctx, "schedule:data", key).Result()
+	if err != nil {
+		return fmt.Errorf("failed to check schedule existence: %w", err)
+	}
+	if exists {
+		return nil // Already scheduled, skip
+	}
+
+	// Marshal Schedule to JSON
 	sched := models.Schedule{
 		Occurrence:  *occurrence,
 		Name:        event.Name,
@@ -42,20 +54,25 @@ func (s *Scheduler) ScheduleEvent(ctx context.Context, occurrence *models.Occurr
 		Metadata:    event.Metadata,
 		Tags:        event.Tags,
 	}
-	// Marshal Schedule to JSON
 	data, err := json.Marshal(sched)
 	if err != nil {
 		return fmt.Errorf("failed to marshal schedule: %w", err)
 	}
 
-	// Add to Redis sorted set with scheduled_at as score
-	score := float64(occurrence.ScheduledAt.UnixMilli())
+	// Add to Redis sorted set and hash
+	score := float64(occurrence.ScheduledAt.Unix())
 	_, err = s.redis.ZAdd(ctx, scheduleKey, redis.Z{
 		Score:  score,
-		Member: string(data),
+		Member: key,
 	}).Result()
-
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to add schedule to sorted set: %w", err)
+	}
+	_, err = s.redis.HSet(ctx, "schedule:data", key, data).Result()
+	if err != nil {
+		return fmt.Errorf("failed to add schedule to hash: %w", err)
+	}
+	return nil
 }
 
 // ScheduleRecurringEvent schedules a recurring event
@@ -75,12 +92,12 @@ func (s *Scheduler) ScheduleRecurringEvent(ctx context.Context, event *models.Ev
 	return err
 }
 
-// GetDueSchedules retrieves schedules that are due for execution
+// GetDueSchedules retrieves schedules that are due for execution (idempotent version)
 func (s *Scheduler) GetDueSchedules(ctx context.Context) ([]*models.Schedule, error) {
-	now := time.Now().UnixMilli()
+	now := time.Now().Unix()
 
-	// Get all schedules due up to now
-	results, err := s.redis.ZRangeByScore(ctx, scheduleKey, &redis.ZRangeBy{
+	// Get all due schedule keys
+	keys, err := s.redis.ZRangeByScore(ctx, scheduleKey, &redis.ZRangeBy{
 		Min: "0",
 		Max: fmt.Sprintf("%d", now),
 	}).Result()
@@ -89,31 +106,44 @@ func (s *Scheduler) GetDueSchedules(ctx context.Context) ([]*models.Schedule, er
 	}
 
 	var schedules []*models.Schedule
-	for _, result := range results {
+	for _, key := range keys {
+		// Fetch schedule JSON from hash
+		data, err := s.redis.HGet(ctx, "schedule:data", key).Result()
+		if err == redis.Nil {
+			continue // No data, skip
+		} else if err != nil {
+			return nil, fmt.Errorf("failed to get schedule data from hash: %w", err)
+		}
 		var sched models.Schedule
-		if err := json.Unmarshal([]byte(result), &sched); err != nil {
+		if err := json.Unmarshal([]byte(data), &sched); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal schedule: %w", err)
 		}
 		schedules = append(schedules, &sched)
 
-		// Remove the current schedule
-		if err := s.redis.ZRem(ctx, scheduleKey, result).Err(); err != nil {
-			return nil, fmt.Errorf("failed to remove processed schedule: %w", err)
+		// Remove from both sorted set and hash after processing
+		if err := s.redis.ZRem(ctx, scheduleKey, key).Err(); err != nil {
+			return nil, fmt.Errorf("failed to remove processed schedule from sorted set: %w", err)
+		}
+		if err := s.redis.HDel(ctx, "schedule:data", key).Err(); err != nil {
+			return nil, fmt.Errorf("failed to remove processed schedule from hash: %w", err)
 		}
 	}
 
 	return schedules, nil
 }
 
-// RemoveScheduledEvent removes a scheduled event from Redis
+// RemoveScheduledEvent removes a scheduled event from Redis (idempotent version)
 func (s *Scheduler) RemoveScheduledEvent(ctx context.Context, occurrence *models.Occurrence) error {
-	data, err := json.Marshal(occurrence)
+	key := fmt.Sprintf("schedule:%s:%d", occurrence.EventID.String(), occurrence.ScheduledAt.Unix())
+	_, err := s.redis.ZRem(ctx, scheduleKey, key).Result()
 	if err != nil {
-		return fmt.Errorf("failed to marshal occurrence: %w", err)
+		return fmt.Errorf("failed to remove schedule from sorted set: %w", err)
 	}
-
-	_, err = s.redis.ZRem(ctx, scheduleKey, data).Result()
-	return err
+	_, err = s.redis.HDel(ctx, "schedule:data", key).Result()
+	if err != nil {
+		return fmt.Errorf("failed to remove schedule from hash: %w", err)
+	}
+	return nil
 }
 
 // GetRecurringEvents retrieves all recurring events

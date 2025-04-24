@@ -8,6 +8,14 @@ import (
 	"gorm.io/datatypes"
 )
 
+// Qhronos Event → Schedule → Occurrence flow:
+// - Event: User-defined intent/configuration, stored in the database.
+// - Schedule: Actionable plan (in Redis) for when the event should be executed, created by the expander.
+// - Occurrence: Created only after a scheduled event is executed (dispatched by the dispatcher). Represents the actual attempt to process (dispatch) the event at a specific time, with status and result information.
+
+// Occurrence represents a single execution attempt of an event, created only after a scheduled event (from Redis) is executed by the dispatcher.
+// For recurring events, multiple occurrences are generated as each scheduled execution is processed. Each occurrence tracks its status, attempts, and delivery history.
+
 type OccurrenceStatus string
 
 const (
