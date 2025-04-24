@@ -157,7 +157,21 @@ This schedules the event to occur every Monday and Friday.
 
 ## Configuration
 - Copy `config.example.yaml` to `config.yaml` and edit as needed.
-- Or set environment variables to override config values.
+- Or set CLI flags to override config values.
+
+### Scheduler Lookahead Settings
+
+The scheduler section in your config controls how far into the future recurring events are expanded and how often the expander runs:
+
+```yaml
+scheduler:
+  look_ahead_duration: 24h   # How far into the future to expand recurring events
+  expansion_interval: 5m     # How often to run the expander
+```
+- `look_ahead_duration`: Controls the window (e.g., 24h) for which recurring event occurrences are pre-generated.
+- `expansion_interval`: How frequently the expander checks and generates new occurrences.
+
+Adjust these values in your `config.yaml` to tune scheduling behavior for your workload.
 
 ## Deployment
 - Supports Docker, Docker Compose, and Kubernetes.

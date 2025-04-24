@@ -18,6 +18,10 @@ auth:
   master_token: "your-master-token-here"
   jwt_secret: "your-jwt-secret-here"
 
+scheduler:
+  look_ahead_duration: 24h   # How far into the future to expand recurring events
+  expansion_interval: 5m     # How often to run the expander
+
 archival:
   check_period: 1h 
 
