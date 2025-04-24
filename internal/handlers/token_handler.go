@@ -4,9 +4,11 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/gin-gonic/gin"
+	"github.com/feedloop/qhronos/internal/middleware"
 	"github.com/feedloop/qhronos/internal/models"
 	"github.com/feedloop/qhronos/internal/services"
+	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
 type TokenHandler struct {
@@ -21,9 +23,11 @@ func NewTokenHandler(tokenService *services.TokenService) *TokenHandler {
 
 // CreateToken handles the creation of new JWT tokens
 func (h *TokenHandler) CreateToken(c *gin.Context) {
+	logger := c.MustGet(middleware.LoggerKey).(*zap.Logger)
 	// Get the authorization token from the header
 	authHeader := c.GetHeader("Authorization")
 	if authHeader == "" {
+		logger.Warn("Missing authorization header for token creation")
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "authorization header is required"})
 		return
 	}
@@ -33,6 +37,7 @@ func (h *TokenHandler) CreateToken(c *gin.Context) {
 
 	// Validate the master token
 	if !h.tokenService.ValidateMasterToken(token) {
+		logger.Warn("Invalid master token for token creation")
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid master token"})
 		return
 	}
@@ -40,12 +45,14 @@ func (h *TokenHandler) CreateToken(c *gin.Context) {
 	// Parse the request body
 	var req models.CreateTokenRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		logger.Warn("Invalid token creation request", zap.Error(err))
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
 	// Validate the request
 	if req.Type != models.TokenTypeJWT {
+		logger.Warn("Unsupported token type", zap.String("type", string(req.Type)))
 		c.JSON(http.StatusBadRequest, gin.H{"error": "only JWT tokens are supported"})
 		return
 	}
@@ -53,9 +60,11 @@ func (h *TokenHandler) CreateToken(c *gin.Context) {
 	// Create the JWT token
 	tokenString, err := h.tokenService.CreateJWTToken(&req)
 	if err != nil {
+		logger.Error("Failed to create JWT token", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create token"})
 		return
 	}
+	logger.Info("JWT token created", zap.String("sub", req.Sub), zap.String("access", string(req.Access)))
 
 	// Return the token response
 	c.JSON(http.StatusOK, models.CreateTokenResponse{
@@ -121,4 +130,4 @@ func (h *TokenHandler) AuthMiddleware(requiredAccess models.AccessLevel, require
 		c.Set("token", token)
 		c.Next()
 	}
-} 
+}

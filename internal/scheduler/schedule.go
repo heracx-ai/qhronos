@@ -3,8 +3,9 @@ package scheduler
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 const (
@@ -39,26 +40,26 @@ const (
 
 // Schedule represents a JSON-based recurrence schedule
 type Schedule struct {
-	Frequency    Frequency   `json:"frequency"`
-	Interval     int         `json:"interval"`
-	DaysOfWeek   []DayOfWeek `json:"days_of_week,omitempty"`
-	DaysOfMonth  []int       `json:"days_of_month,omitempty"`
-	Months       []int       `json:"months,omitempty"`
-	Count        *int        `json:"count,omitempty"`
-	Until        *time.Time  `json:"until,omitempty"`
+	Frequency   Frequency   `json:"frequency"`
+	Interval    int         `json:"interval"`
+	DaysOfWeek  []DayOfWeek `json:"days_of_week,omitempty"`
+	DaysOfMonth []int       `json:"days_of_month,omitempty"`
+	Months      []int       `json:"months,omitempty"`
+	Count       *int        `json:"count,omitempty"`
+	Until       *time.Time  `json:"until,omitempty"`
 }
 
 // ParseSchedule parses a JSON schedule string and returns a Schedule instance
-func ParseSchedule(scheduleStr string) (*Schedule, error) {
-	log.Printf("Parsing Schedule: %s", scheduleStr)
+func ParseSchedule(scheduleStr string, logger *zap.Logger) (*Schedule, error) {
+	logger.Debug("Parsing Schedule", zap.String("scheduleStr", scheduleStr))
 	if scheduleStr == "" {
-		log.Printf("Empty Schedule provided")
+		logger.Debug("Empty Schedule provided")
 		return nil, fmt.Errorf("empty schedule")
 	}
 
 	var schedule Schedule
 	if err := json.Unmarshal([]byte(scheduleStr), &schedule); err != nil {
-		log.Printf("Error parsing Schedule: %v", err)
+		logger.Error("Error parsing Schedule", zap.Error(err))
 		return nil, fmt.Errorf("invalid schedule format: %w", err)
 	}
 
@@ -66,7 +67,7 @@ func ParseSchedule(scheduleStr string) (*Schedule, error) {
 		return nil, err
 	}
 
-	log.Printf("Successfully parsed Schedule: %s", scheduleStr)
+	logger.Debug("Successfully parsed Schedule", zap.String("scheduleStr", scheduleStr))
 	return &schedule, nil
 }
 
@@ -120,9 +121,8 @@ func (s *Schedule) Validate() error {
 }
 
 // GetNextOccurrences calculates the next occurrences based on the schedule
-func (s *Schedule) GetNextOccurrences(startTime time.Time, endTime time.Time) ([]time.Time, error) {
-	log.Printf("Getting next occurrences from %v to %v with schedule: %+v", 
-		startTime.UTC(), endTime.UTC(), s)
+func (s *Schedule) GetNextOccurrences(startTime time.Time, endTime time.Time, logger *zap.Logger) ([]time.Time, error) {
+	logger.Debug("Getting next occurrences", zap.Time("startTime", startTime), zap.Time("endTime", endTime), zap.Any("schedule", s))
 
 	// Ensure times are in UTC
 	startTimeUTC := startTime.UTC()
@@ -159,7 +159,7 @@ func (s *Schedule) GetNextOccurrences(startTime time.Time, endTime time.Time) ([
 		}
 	}
 
-	log.Printf("Found %d occurrences between %v and %v", len(occurrences), startTimeUTC, endTimeUTC)
+	logger.Debug("Found occurrences", zap.Int("count", len(occurrences)), zap.Time("startTime", startTime), zap.Time("endTime", endTime))
 	return occurrences, nil
 }
 
@@ -211,4 +211,4 @@ func (s *Schedule) isValidOccurrence(t time.Time) bool {
 	}
 
 	return true
-} 
+}

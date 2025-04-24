@@ -5,11 +5,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/feedloop/qhronos/internal/middleware"
 	"github.com/feedloop/qhronos/internal/models"
 	"github.com/feedloop/qhronos/internal/repository"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/lib/pq"
+	"go.uber.org/zap"
 	"gorm.io/datatypes"
 )
 
@@ -22,8 +24,10 @@ func NewEventHandler(repo *repository.EventRepository) *EventHandler {
 }
 
 func (h *EventHandler) CreateEvent(c *gin.Context) {
+	logger := c.MustGet(middleware.LoggerKey).(*zap.Logger)
 	var req models.CreateEventRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		logger.Warn("Invalid event creation request", zap.Error(err))
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -42,7 +46,7 @@ func (h *EventHandler) CreateEvent(c *gin.Context) {
 		return
 	}
 	// Default metadata to empty object if not provided
-	if req.Metadata == nil || len(req.Metadata) == 0 {
+	if len(req.Metadata) == 0 {
 		emptyJSON := datatypes.JSON([]byte("{}"))
 		req.Metadata = emptyJSON
 	}
@@ -68,10 +72,11 @@ func (h *EventHandler) CreateEvent(c *gin.Context) {
 	}
 
 	if err := h.repo.Create(c, event); err != nil {
+		logger.Error("Failed to create event", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-
+	logger.Info("Event created", zap.String("event_id", event.ID.String()))
 	c.JSON(http.StatusCreated, event)
 }
 

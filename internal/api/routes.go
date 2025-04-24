@@ -4,17 +4,19 @@ import (
 	"github.com/feedloop/qhronos/internal/handlers"
 	"github.com/feedloop/qhronos/internal/middleware"
 	"github.com/gin-gonic/gin"
-	"github.com/sirupsen/logrus"
 )
 
 // SetupRoutes configures all API routes with their middleware
-func SetupRoutes(router *gin.Engine, eventHandler *handlers.EventHandler, occurrenceHandler *handlers.OccurrenceHandler, tokenHandler *handlers.TokenHandler, rateLimiter *middleware.RateLimiter, masterToken string) {
-	// Create logger
-	logger := logrus.New()
-
-	// Global middleware
-	router.Use(middleware.Logger(logger))
-	router.Use(middleware.ErrorHandler())
+func SetupRoutes(
+	router *gin.Engine,
+	eventHandler *handlers.EventHandler,
+	occurrenceHandler *handlers.OccurrenceHandler,
+	tokenHandler *handlers.TokenHandler,
+	rateLimiter *middleware.RateLimiter,
+	masterToken string,
+) {
+	// Note: We no longer need to create a logrus logger here
+	// The RequestIDMiddleware is now responsible for logging requests
 
 	// Public routes
 	public := router.Group("/")
@@ -27,7 +29,8 @@ func SetupRoutes(router *gin.Engine, eventHandler *handlers.EventHandler, occurr
 
 	// Protected routes with rate limiting
 	protected := router.Group("/")
-	protected.Use(middleware.TokenAuth(logger))
+	// Note: TokenAuth middleware was updated in a separate change to use the zap logger from context
+	protected.Use(middleware.TokenAuth())
 	protected.Use(rateLimiter.RateLimit())
 	{
 		// Event routes

@@ -17,13 +17,15 @@ import (
 	"github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 	"gorm.io/datatypes"
 )
 
 func TestOccurrenceHandler(t *testing.T) {
 	db := testutils.TestDB(t)
-	eventRepo := repository.NewEventRepository(db)
-	occurrenceRepo := repository.NewOccurrenceRepository(db)
+	logger := zap.NewNop()
+	eventRepo := repository.NewEventRepository(db, logger)
+	occurrenceRepo := repository.NewOccurrenceRepository(db, logger)
 	handler := NewOccurrenceHandler(eventRepo, occurrenceRepo)
 
 	cleanup := func() {
@@ -33,6 +35,11 @@ func TestOccurrenceHandler(t *testing.T) {
 	}
 
 	router := gin.Default()
+	// Inject logger into context for all requests
+	router.Use(func(c *gin.Context) {
+		c.Set("logger", logger)
+		c.Next()
+	})
 	router.GET("/occurrences/:id", handler.GetOccurrence)
 	router.GET("/events/:id/occurrences", handler.ListOccurrencesByEvent)
 	router.GET("/occurrences", handler.ListOccurrencesByTags)

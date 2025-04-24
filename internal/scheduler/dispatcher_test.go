@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 type MockHTTPClient struct {
@@ -37,12 +38,13 @@ func (m *MockHTTPClient) Do(req *http.Request) (*http.Response, error) {
 func TestDispatcher(t *testing.T) {
 	ctx := context.Background()
 	db := testutils.TestDB(t)
-	eventRepo := repository.NewEventRepository(db)
-	occurrenceRepo := repository.NewOccurrenceRepository(db)
+	logger := zap.NewNop()
+	eventRepo := repository.NewEventRepository(db, logger)
+	occurrenceRepo := repository.NewOccurrenceRepository(db, logger)
 	hmacService := services.NewHMACService("test-secret")
 	mockHTTP := new(MockHTTPClient)
 
-	dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService)
+	dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger)
 	dispatcher.SetHTTPClient(mockHTTP)
 
 	// Add cleanup function

@@ -13,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 func TestTokenHandler(t *testing.T) {
@@ -23,6 +24,11 @@ func TestTokenHandler(t *testing.T) {
 	handler := NewTokenHandler(tokenService)
 
 	router := gin.Default()
+	logger := zap.NewNop()
+	router.Use(func(c *gin.Context) {
+		c.Set("logger", logger)
+		c.Next()
+	})
 	router.POST("/tokens", handler.CreateToken)
 
 	// Test cases

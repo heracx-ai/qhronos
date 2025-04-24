@@ -11,14 +11,16 @@ import (
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 	"github.com/lib/pq"
+	"go.uber.org/zap"
 )
 
 type EventRepository struct {
-	db *sqlx.DB
+	db     *sqlx.DB
+	logger *zap.Logger
 }
 
-func NewEventRepository(db *sqlx.DB) *EventRepository {
-	return &EventRepository{db: db}
+func NewEventRepository(db *sqlx.DB, logger *zap.Logger) *EventRepository {
+	return &EventRepository{db: db, logger: logger}
 }
 
 func timePtr(t time.Time) *time.Time {

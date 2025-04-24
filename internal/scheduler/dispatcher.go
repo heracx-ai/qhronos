@@ -12,6 +12,7 @@ import (
 	"github.com/feedloop/qhronos/internal/models"
 	"github.com/feedloop/qhronos/internal/repository"
 	"github.com/feedloop/qhronos/internal/services"
+	"go.uber.org/zap"
 )
 
 type Dispatcher struct {
@@ -21,6 +22,7 @@ type Dispatcher struct {
 	client         HTTPClient
 	maxRetries     int
 	retryDelay     time.Duration
+	logger         *zap.Logger
 }
 
 // HTTPClient interface for mocking HTTP requests
@@ -37,7 +39,7 @@ func (d *DefaultHTTPClient) Do(req *http.Request) (*http.Response, error) {
 	return d.client.Do(req)
 }
 
-func NewDispatcher(eventRepo *repository.EventRepository, occurrenceRepo *repository.OccurrenceRepository, hmacService *services.HMACService) *Dispatcher {
+func NewDispatcher(eventRepo *repository.EventRepository, occurrenceRepo *repository.OccurrenceRepository, hmacService *services.HMACService, logger *zap.Logger) *Dispatcher {
 	return &Dispatcher{
 		eventRepo:      eventRepo,
 		occurrenceRepo: occurrenceRepo,
@@ -45,6 +47,7 @@ func NewDispatcher(eventRepo *repository.EventRepository, occurrenceRepo *reposi
 		client:         &DefaultHTTPClient{client: &http.Client{Timeout: 10 * time.Second}},
 		maxRetries:     3,
 		retryDelay:     5 * time.Second,
+		logger:         logger,
 	}
 }
 
@@ -195,18 +198,20 @@ func (d *Dispatcher) DispatchWebhook(ctx context.Context, occurrence *models.Occ
 
 // Run processes due events and dispatches webhooks
 func (d *Dispatcher) Run(ctx context.Context, scheduler *Scheduler) error {
+	d.logger.Info("Starting dispatcher")
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
+			d.logger.Info("Dispatcher shutting down")
 			return ctx.Err()
 		case <-ticker.C:
 			// Get due occurrences
 			occurrences, err := scheduler.GetDueOccurrence(ctx)
 			if err != nil {
-				fmt.Printf("Error getting due occurrences: %v\n", err)
+				d.logger.Error("Error getting due occurrences", zap.Error(err))
 				continue
 			}
 
@@ -214,17 +219,22 @@ func (d *Dispatcher) Run(ctx context.Context, scheduler *Scheduler) error {
 			for _, occurrence := range occurrences {
 				event, err := d.eventRepo.GetByID(ctx, occurrence.EventID)
 				if err != nil {
-					fmt.Printf("Error getting event for occurrence %d: %v\n", occurrence.ID, err)
+					d.logger.Error("Error getting event for occurrence",
+						zap.Int("occurrence_id", occurrence.ID),
+						zap.Error(err))
 					continue
 				}
 				if event == nil {
-					fmt.Printf("Event not found for occurrence %d\n", occurrence.ID)
+					d.logger.Warn("Event not found for occurrence",
+						zap.Int("occurrence_id", occurrence.ID))
 					continue
 				}
 
 				// Dispatch webhook
 				if err := d.DispatchWebhook(ctx, occurrence, event); err != nil {
-					fmt.Printf("Error dispatching webhook for occurrence %d: %v\n", occurrence.ID, err)
+					d.logger.Error("Error dispatching webhook",
+						zap.Int("occurrence_id", occurrence.ID),
+						zap.Error(err))
 					continue
 				}
 			}

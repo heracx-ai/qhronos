@@ -13,11 +13,13 @@ import (
 	"github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 	"gorm.io/datatypes"
 )
 
 func TestArchivalScheduler(t *testing.T) {
 	db := testutils.TestDB(t)
+	logger := zap.NewNop()
 	ctx := context.Background()
 
 	// Clean up tables before test
@@ -37,7 +39,7 @@ func TestArchivalScheduler(t *testing.T) {
 		Status:      models.EventStatusActive,
 		CreatedAt:   time.Now().Add(-48 * time.Hour),
 	}
-	eventRepo := repository.NewEventRepository(db)
+	eventRepo := repository.NewEventRepository(db, logger)
 	err = eventRepo.Create(ctx, oldEvent)
 	require.NoError(t, err)
 
@@ -54,7 +56,7 @@ func TestArchivalScheduler(t *testing.T) {
 		StartedAt:    time.Now().Add(-48 * time.Hour),
 		CompletedAt:  time.Now().Add(-47 * time.Hour),
 	}
-	occRepo := repository.NewOccurrenceRepository(db)
+	occRepo := repository.NewOccurrenceRepository(db, logger)
 	err = occRepo.Create(ctx, oldOccurrence)
 	require.NoError(t, err)
 
@@ -68,7 +70,7 @@ func TestArchivalScheduler(t *testing.T) {
 	durations, err := (&config.Config{Retention: retention}).ParseRetentionDurations()
 	require.NoError(t, err)
 	checkPeriod := 2 * time.Second
-	StartArchivalScheduler(db, checkPeriod, *durations, archivalStopCh)
+	StartArchivalScheduler(db, checkPeriod, *durations, archivalStopCh, logger)
 
 	// Also call the archival function directly for immediate effect
 	_, err = db.ExecContext(ctx, "SELECT archive_old_data($1)", "24 hours")

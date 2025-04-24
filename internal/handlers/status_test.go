@@ -9,12 +9,18 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
+	"go.uber.org/zap"
 )
 
 func TestStatusHandler(t *testing.T) {
 	// Setup
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
+	logger := zap.NewNop()
+	router.Use(func(c *gin.Context) {
+		c.Set("logger", logger)
+		c.Next()
+	})
 	router.GET("/status", StatusHandler)
 
 	// Test
@@ -55,6 +61,11 @@ func TestStatusHandler_Uptime(t *testing.T) {
 	// Setup
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
+	logger := zap.NewNop()
+	router.Use(func(c *gin.Context) {
+		c.Set("logger", logger)
+		c.Next()
+	})
 	router.GET("/status", StatusHandler)
 
 	// Record start time
@@ -77,4 +88,4 @@ func TestStatusHandler_Uptime(t *testing.T) {
 	elapsed := time.Since(start).Seconds()
 	assert.GreaterOrEqual(t, response.UptimeSeconds, int64(elapsed))
 	assert.Less(t, response.UptimeSeconds, int64(elapsed+1)) // Should be within 1 second
-} 
+}

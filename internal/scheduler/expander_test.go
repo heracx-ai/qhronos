@@ -13,15 +13,17 @@ import (
 	"github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 func TestEventExpander(t *testing.T) {
 	ctx := context.Background()
 	db := testutils.TestDB(t)
-	eventRepo := repository.NewEventRepository(db)
-	occurrenceRepo := repository.NewOccurrenceRepository(db)
+	logger := zap.NewNop()
+	eventRepo := repository.NewEventRepository(db, logger)
+	occurrenceRepo := repository.NewOccurrenceRepository(db, logger)
 	redisClient := testutils.TestRedis(t)
-	scheduler := NewScheduler(redisClient)
+	scheduler := NewScheduler(redisClient, logger)
 
 	// Add cleanup function
 	cleanup := func() {
@@ -37,7 +39,7 @@ func TestEventExpander(t *testing.T) {
 	lookAheadDuration := 24 * time.Hour
 	expansionInterval := 5 * time.Minute
 
-	expander := NewExpander(scheduler, eventRepo, occurrenceRepo, lookAheadDuration, expansionInterval)
+	expander := NewExpander(scheduler, eventRepo, occurrenceRepo, lookAheadDuration, expansionInterval, logger)
 
 	t.Run("successful event expansion", func(t *testing.T) {
 		cleanup()
@@ -124,9 +126,52 @@ func TestEventExpander(t *testing.T) {
 		err = expander.ExpandEvents(ctx)
 		require.NoError(t, err)
 
-		// Verify no occurrences were created in Redis
+		// Verify one occurrence was created in Redis
 		results, err := redisClient.ZRange(ctx, scheduleKey, 0, -1).Result()
 		require.NoError(t, err)
-		assert.Empty(t, results)
+		assert.Len(t, results, 1)
+
+		// Verify the occurrence is for the correct event and scheduled at the correct time
+		var occurrence models.Occurrence
+		err = json.Unmarshal([]byte(results[0]), &occurrence)
+		require.NoError(t, err)
+		assert.Equal(t, event.ID, occurrence.EventID)
+		assert.Equal(t, event.StartTime.Unix(), occurrence.ScheduledAt.Unix())
+	})
+
+	t.Run("non-recurring event schedules single occurrence", func(t *testing.T) {
+		cleanup()
+		// Create a non-recurring event (Schedule == nil) with a future StartTime
+		startTime := time.Now().Add(2 * time.Hour)
+		event := &models.Event{
+			ID:          uuid.New(),
+			Name:        "Non-Recurring Event",
+			Description: "Should schedule one occurrence",
+			StartTime:   startTime,
+			WebhookURL:  "http://example.com",
+			Schedule:    nil, // Non-recurring
+			Status:      models.EventStatusActive,
+			Metadata:    []byte(`{"key": "value"}`),
+			Tags:        pq.StringArray{"test"},
+			CreatedAt:   time.Now(),
+		}
+		err := eventRepo.Create(ctx, event)
+		require.NoError(t, err)
+
+		// Run expansion
+		err = expander.ExpandEvents(ctx)
+		require.NoError(t, err)
+
+		// Get all occurrences from Redis sorted set
+		results, err := redisClient.ZRange(ctx, scheduleKey, 0, -1).Result()
+		require.NoError(t, err)
+		assert.Len(t, results, 1)
+
+		// Verify the occurrence is for the correct event and scheduled at the correct time
+		var occurrence models.Occurrence
+		err = json.Unmarshal([]byte(results[0]), &occurrence)
+		require.NoError(t, err)
+		assert.Equal(t, event.ID, occurrence.EventID)
+		assert.Equal(t, startTime.Unix(), occurrence.ScheduledAt.Unix())
 	})
 }

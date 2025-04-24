@@ -4,7 +4,9 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/feedloop/qhronos/internal/middleware"
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
 var startTime = time.Now()
@@ -16,11 +18,11 @@ func getStartTime() time.Time {
 
 // StatusResponse represents the status endpoint response
 type StatusResponse struct {
-	Status        string    `json:"status"`
-	UptimeSeconds int64     `json:"uptime_seconds"`
-	Version       string    `json:"version"`
-	JWT           JWTInfo   `json:"jwt"`
-	HMAC          HMACInfo  `json:"hmac"`
+	Status        string   `json:"status"`
+	UptimeSeconds int64    `json:"uptime_seconds"`
+	Version       string   `json:"version"`
+	JWT           JWTInfo  `json:"jwt"`
+	HMAC          HMACInfo `json:"hmac"`
 }
 
 // JWTInfo contains JWT configuration information
@@ -39,13 +41,14 @@ type JWTInfo struct {
 // HMACInfo contains HMAC signing configuration
 type HMACInfo struct {
 	Algorithm              string `json:"algorithm"`
-	SignatureHeader       string `json:"signature_header"`
-	DefaultSecret         string `json:"default_secret"`
+	SignatureHeader        string `json:"signature_header"`
+	DefaultSecret          string `json:"default_secret"`
 	EventOverrideSupported bool   `json:"event_override_supported"`
 }
 
 // StatusHandler handles the status endpoint
 func StatusHandler(c *gin.Context) {
+	logger := c.MustGet(middleware.LoggerKey).(*zap.Logger)
 	response := StatusResponse{
 		Status:        "ok",
 		UptimeSeconds: int64(time.Since(getStartTime()).Seconds()),
@@ -68,11 +71,11 @@ func StatusHandler(c *gin.Context) {
 		},
 		HMAC: HMACInfo{
 			Algorithm:              "HMAC-SHA256",
-			SignatureHeader:       "X-Qhronos-Signature",
-			DefaultSecret:         "qhronos.io",
+			SignatureHeader:        "X-Qhronos-Signature",
+			DefaultSecret:          "qhronos.io",
 			EventOverrideSupported: true,
 		},
 	}
-
+	logger.Info("Status endpoint checked", zap.Int64("uptime_seconds", response.UptimeSeconds))
 	c.JSON(http.StatusOK, response)
-} 
+}

@@ -17,6 +17,7 @@ import (
 	"github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 	"gorm.io/datatypes"
 )
 
@@ -26,7 +27,8 @@ func timePtr(t time.Time) *time.Time {
 
 func TestEventHandler(t *testing.T) {
 	db := testutils.TestDB(t)
-	eventRepo := repository.NewEventRepository(db)
+	logger := zap.NewNop()
+	eventRepo := repository.NewEventRepository(db, logger)
 	handler := NewEventHandler(eventRepo)
 
 	cleanup := func() {
@@ -37,6 +39,11 @@ func TestEventHandler(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 	router := gin.Default()
+	// Inject logger into context for all requests
+	router.Use(func(c *gin.Context) {
+		c.Set("logger", logger)
+		c.Next()
+	})
 	router.POST("/events", handler.CreateEvent)
 	router.GET("/events/:id", handler.GetEvent)
 	router.PUT("/events/:id", handler.UpdateEvent)

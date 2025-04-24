@@ -13,6 +13,7 @@ import (
 	"github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 	"gorm.io/datatypes"
 )
 
@@ -29,7 +30,8 @@ func setupTestDB(t *testing.T) *sqlx.DB {
 
 func TestEventRepository(t *testing.T) {
 	db := testutils.TestDB(t)
-	repo := NewEventRepository(db)
+	logger := zap.NewNop()
+	repo := NewEventRepository(db, logger)
 
 	// Add cleanup function
 	cleanup := func() {
@@ -337,7 +339,7 @@ func TestEventRepository(t *testing.T) {
 			Timestamp:    time.Now(),
 		}
 
-		occurrenceRepo := NewOccurrenceRepository(db)
+		occurrenceRepo := NewOccurrenceRepository(db, logger)
 		err = occurrenceRepo.Create(context.Background(), occurrence)
 		require.NoError(t, err)
 
@@ -393,7 +395,8 @@ func TestDeleteOldEvents(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	repo := NewEventRepository(db)
+	logger := zap.NewNop()
+	repo := NewEventRepository(db, logger)
 	ctx := context.Background()
 
 	// Create test data
@@ -460,7 +463,8 @@ func TestDeleteOldOccurrences(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	repo := NewEventRepository(db)
+	logger := zap.NewNop()
+	repo := NewEventRepository(db, logger)
 	ctx := context.Background()
 
 	// Create test event
@@ -535,6 +539,8 @@ func TestArchiveOldData(t *testing.T) {
 	db := setupTestDB(t)
 	ctx := context.Background()
 
+	logger := zap.NewNop()
+
 	// Insert an old event and occurrence
 	oldEvent := &models.Event{
 		ID:          uuid.New(),
@@ -548,7 +554,7 @@ func TestArchiveOldData(t *testing.T) {
 		Status:      models.EventStatusActive,
 		CreatedAt:   time.Now().Add(-48 * time.Hour),
 	}
-	eventRepo := NewEventRepository(db)
+	eventRepo := NewEventRepository(db, logger)
 	err := eventRepo.Create(ctx, oldEvent)
 	require.NoError(t, err)
 
@@ -565,7 +571,7 @@ func TestArchiveOldData(t *testing.T) {
 		StartedAt:    time.Now().Add(-48 * time.Hour),
 		CompletedAt:  time.Now().Add(-47 * time.Hour),
 	}
-	occRepo := NewOccurrenceRepository(db)
+	occRepo := NewOccurrenceRepository(db, logger)
 	err = occRepo.Create(ctx, oldOccurrence)
 	require.NoError(t, err)
 

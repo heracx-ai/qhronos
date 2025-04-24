@@ -9,6 +9,7 @@ import (
 	"github.com/feedloop/qhronos/internal/models"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+	"go.uber.org/zap"
 )
 
 const (
@@ -19,11 +20,15 @@ const (
 )
 
 type Scheduler struct {
-	redis *redis.Client
+	redis  *redis.Client
+	logger *zap.Logger
 }
 
-func NewScheduler(redis *redis.Client) *Scheduler {
-	return &Scheduler{redis: redis}
+func NewScheduler(redis *redis.Client, logger *zap.Logger) *Scheduler {
+	return &Scheduler{
+		redis:  redis,
+		logger: logger,
+	}
 }
 
 // ScheduleEvent schedules a single event occurrence

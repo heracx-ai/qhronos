@@ -24,3 +24,10 @@ archival:
 retention:
   events: 30d
   occurrences: 7d 
+
+logging:
+  level: "info"           # Log level: debug, info, warn, error
+  file_path: "logs/qhronos.log" # Path to the log file
+  max_size: 50            # Max size (MB) before rotation
+  max_backups: 7          # Max number of old log files to retain
+  max_age: 30             # Max age (days) to retain old log files 

@@ -11,12 +11,14 @@ import (
 	"github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 func TestOccurrenceRepository(t *testing.T) {
 	db := testutils.TestDB(t)
-	eventRepo := NewEventRepository(db)
-	repo := NewOccurrenceRepository(db)
+	logger := zap.NewNop()
+	eventRepo := NewEventRepository(db, logger)
+	repo := NewOccurrenceRepository(db, logger)
 
 	cleanup := func() {
 		ctx := context.Background()

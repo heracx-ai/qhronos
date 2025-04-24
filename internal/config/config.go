@@ -12,6 +12,14 @@ type ArchivalConfig struct {
 	CheckPeriod time.Duration `mapstructure:"check_period"`
 }
 
+type LoggingConfig struct {
+	Level      string `mapstructure:"level"`
+	FilePath   string `mapstructure:"file_path"`
+	MaxSize    int    `mapstructure:"max_size"`
+	MaxBackups int    `mapstructure:"max_backups"`
+	MaxAge     int    `mapstructure:"max_age"`
+}
+
 type Config struct {
 	Server    ServerConfig    `mapstructure:"server"`
 	Database  DatabaseConfig  `mapstructure:"database"`
@@ -21,6 +29,7 @@ type Config struct {
 	Scheduler SchedulerConfig `mapstructure:"scheduler"`
 	Retention RetentionConfig `mapstructure:"retention"`
 	Archival  ArchivalConfig  `mapstructure:"archival"`
+	Logging   LoggingConfig   `mapstructure:"logging"`
 }
 
 type ServerConfig struct {
@@ -96,6 +105,11 @@ func Load() (*Config, error) {
 	viper.SetDefault("retention.occurrences", "7d")
 	viper.SetDefault("retention.cleanup_interval", "1h")
 	viper.SetDefault("archival.check_period", "1h")
+	viper.SetDefault("logging.level", "info")
+	viper.SetDefault("logging.file_path", "qhronos.log")
+	viper.SetDefault("logging.max_size", 10)
+	viper.SetDefault("logging.max_backups", 3)
+	viper.SetDefault("logging.max_age", 7)
 
 	// Read environment variables
 	viper.AutomaticEnv()

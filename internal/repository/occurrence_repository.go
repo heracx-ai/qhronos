@@ -3,8 +3,9 @@ package repository
 import (
 	"context"
 	"database/sql"
-	"log"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/feedloop/qhronos/internal/models"
 	"github.com/google/uuid"
@@ -13,25 +14,26 @@ import (
 )
 
 type OccurrenceRepository struct {
-	db *sqlx.DB
+	db     *sqlx.DB
+	logger *zap.Logger
 }
 
-func NewOccurrenceRepository(db *sqlx.DB) *OccurrenceRepository {
-	log.Printf("Initializing OccurrenceRepository")
-	return &OccurrenceRepository{db: db}
+func NewOccurrenceRepository(db *sqlx.DB, logger *zap.Logger) *OccurrenceRepository {
+	logger.Debug("Initializing OccurrenceRepository")
+	return &OccurrenceRepository{db: db, logger: logger}
 }
 
 func (r *OccurrenceRepository) GetByID(ctx context.Context, id int) (*models.Occurrence, error) {
-	log.Printf("Getting occurrence by ID: %d", id)
+	r.logger.Debug("Getting occurrence by ID", zap.Int("id", id))
 	var occurrence models.Occurrence
 	query := `SELECT * FROM occurrences WHERE id = $1`
 	err := r.db.GetContext(ctx, &occurrence, query, id)
 	if err == sql.ErrNoRows {
-		log.Printf("Occurrence not found: %d", id)
+		r.logger.Debug("Occurrence not found", zap.Int("id", id))
 		return nil, nil
 	}
 	if err != nil {
-		log.Printf("Error getting occurrence %d: %v", id, err)
+		r.logger.Error("Error getting occurrence", zap.Int("id", id), zap.Error(err))
 		return nil, err
 	}
 	return &occurrence, err
@@ -79,7 +81,7 @@ func (r *OccurrenceRepository) ListByTags(ctx context.Context, filter models.Occ
 
 	err = r.db.SelectContext(ctx, &tempOccurrences, query, pq.Array(filter.Tags), filter.Limit, offset)
 	if err != nil {
-		log.Printf("ListByTags SQL error: %v", err)
+		r.logger.Error("ListByTags SQL error", zap.Error(err))
 		return nil, 0, err
 	}
 
@@ -106,8 +108,7 @@ func (r *OccurrenceRepository) ListByTags(ctx context.Context, filter models.Occ
 }
 
 func (r *OccurrenceRepository) Create(ctx context.Context, occurrence *models.Occurrence) error {
-	log.Printf("Creating occurrence: occurrence_id=%s, event_id=%s, scheduled_at=%v",
-		occurrence.OccurrenceID, occurrence.EventID, occurrence.ScheduledAt)
+	r.logger.Debug("Creating occurrence", zap.String("occurrence_id", occurrence.OccurrenceID.String()), zap.String("event_id", occurrence.EventID.String()), zap.Time("scheduled_at", occurrence.ScheduledAt))
 	query := `
 		INSERT INTO occurrences (occurrence_id, event_id, scheduled_at, status, attempt_count, timestamp, status_code, response_body, error_message, started_at, completed_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
@@ -127,10 +128,10 @@ func (r *OccurrenceRepository) Create(ctx context.Context, occurrence *models.Oc
 		occurrence.CompletedAt,
 	).Scan(&occurrence.ID, &occurrence.Timestamp)
 	if err != nil {
-		log.Printf("Error creating occurrence: %v", err)
+		r.logger.Error("Error creating occurrence", zap.Error(err))
 		return err
 	}
-	log.Printf("Created occurrence: id=%d", occurrence.ID)
+	r.logger.Debug("Created occurrence", zap.Int("id", occurrence.ID))
 	return nil
 }
 
@@ -177,7 +178,7 @@ func (r *OccurrenceRepository) ListByEventID(ctx context.Context, eventID uuid.U
 
 // ExistsAtTime checks if an occurrence exists for a given event at a specific time
 func (r *OccurrenceRepository) ExistsAtTime(ctx context.Context, eventID uuid.UUID, scheduledAt time.Time) (bool, error) {
-	log.Printf("Checking occurrence existence: event_id=%s, scheduled_at=%v", eventID, scheduledAt)
+	r.logger.Debug("Checking occurrence existence", zap.String("event_id", eventID.String()), zap.Time("scheduled_at", scheduledAt))
 	var exists bool
 	query := `
 		SELECT EXISTS(
@@ -186,10 +187,10 @@ func (r *OccurrenceRepository) ExistsAtTime(ctx context.Context, eventID uuid.UU
 		)`
 	err := r.db.GetContext(ctx, &exists, query, eventID, scheduledAt)
 	if err != nil {
-		log.Printf("Error checking occurrence existence: %v", err)
+		r.logger.Error("Error checking occurrence existence", zap.Error(err))
 		return false, err
 	}
-	log.Printf("Occurrence exists=%v for event_id=%s at time=%v", exists, eventID, scheduledAt)
+	r.logger.Debug("Occurrence exists", zap.Bool("exists", exists), zap.String("event_id", eventID.String()), zap.Time("scheduled_at", scheduledAt))
 	return exists, err
 }
 

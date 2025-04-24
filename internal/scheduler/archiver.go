@@ -3,11 +3,11 @@ package scheduler
 import (
 	"database/sql"
 	"encoding/json"
-	"log"
 	"time"
 
 	"github.com/feedloop/qhronos/internal/config"
 	"github.com/jmoiron/sqlx"
+	"go.uber.org/zap"
 )
 
 const (
@@ -70,10 +70,10 @@ func syncRetentionConfigToDB(db *sqlx.DB, durations config.RetentionDurations) e
 	return err
 }
 
-func StartArchivalScheduler(db *sqlx.DB, checkPeriod time.Duration, durations config.RetentionDurations, stopCh <-chan struct{}) {
+func StartArchivalScheduler(db *sqlx.DB, checkPeriod time.Duration, durations config.RetentionDurations, stopCh <-chan struct{}, logger *zap.Logger) {
 	// Sync retention config on startup
 	if err := syncRetentionConfigToDB(db, durations); err != nil {
-		log.Printf("[archiver] Failed to sync retention config: %v", err)
+		logger.Error("[archiver] Failed to sync retention config", zap.Error(err))
 	}
 	ticker := time.NewTicker(checkPeriod)
 	go func() {
@@ -83,37 +83,37 @@ func StartArchivalScheduler(db *sqlx.DB, checkPeriod time.Duration, durations co
 			case <-ticker.C:
 				gotLock, err := acquireArchiveLock(db)
 				if err != nil {
-					log.Printf("[archiver] Error acquiring lock: %v", err)
+					logger.Error("[archiver] Error acquiring lock", zap.Error(err))
 					continue
 				}
 				if !gotLock {
-					log.Printf("[archiver] Another instance is archiving, skipping this cycle.")
+					logger.Debug("[archiver] Another instance is archiving, skipping this cycle.")
 					continue
 				}
 				shouldRun, err := shouldArchive(db, checkPeriod)
 				if err != nil {
-					log.Printf("[archiver] Error checking last archival time: %v", err)
+					logger.Error("[archiver] Error checking last archival time", zap.Error(err))
 					releaseArchiveLock(db)
 					continue
 				}
 				if !shouldRun {
-					log.Printf("[archiver] Archival already run within the period, skipping.")
+					logger.Debug("[archiver] Archival already run within the period, skipping.")
 					releaseArchiveLock(db)
 					continue
 				}
 				_, err = db.Exec("SELECT archive_old_data($1)", durations.Events.String())
 				if err != nil {
-					log.Printf("[archiver] Error running archive_old_data: %v", err)
+					logger.Error("[archiver] Error running archive_old_data", zap.Error(err))
 					releaseArchiveLock(db)
 					continue
 				}
 				if err := updateLastArchivalTime(db); err != nil {
-					log.Printf("[archiver] Error updating last archival time: %v", err)
+					logger.Error("[archiver] Error updating last archival time", zap.Error(err))
 				}
-				log.Printf("[archiver] Archival completed successfully.")
+				logger.Info("[archiver] Archival completed successfully.")
 				releaseArchiveLock(db)
 			case <-stopCh:
-				log.Printf("[archiver] Stopping archival scheduler.")
+				logger.Info("[archiver] Stopping archival scheduler.")
 				return
 			}
 		}
