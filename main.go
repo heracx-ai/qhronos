@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"database/sql"
+	"embed"
 	"fmt"
 	"net/http"
 	"os"
@@ -19,16 +21,102 @@ import (
 	"github.com/feedloop/qhronos/internal/scheduler"
 	"github.com/feedloop/qhronos/internal/services"
 	"github.com/gin-gonic/gin"
+	"github.com/golang-migrate/migrate/v4"
+	"github.com/golang-migrate/migrate/v4/database/postgres"
+	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/redis/go-redis/v9"
+	"github.com/spf13/pflag"
 	"go.uber.org/zap"
 )
 
+// NOTE: At least one .sql file must exist in migrations/ for embedding to work.
+// Make sure to build from the project root so the path is correct.
+//
+//go:embed migrations/*.sql
+var migrationsFS embed.FS
+
+func runMigrations(cfg *config.Config) error {
+	dsn := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
+		cfg.Database.User,
+		cfg.Database.Password,
+		cfg.Database.Host,
+		cfg.Database.Port,
+		cfg.Database.DBName,
+		cfg.Database.SSLMode,
+	)
+	d, err := iofs.New(migrationsFS, "migrations")
+	if err != nil {
+		return err
+	}
+	db, err := sql.Open("postgres", dsn)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	driver, err := postgres.WithInstance(db, &postgres.Config{})
+	if err != nil {
+		return err
+	}
+	m, err := migrate.NewWithInstance("iofs", d, "postgres", driver)
+	if err != nil {
+		return err
+	}
+	err = m.Up()
+	if err != nil && err != migrate.ErrNoChange {
+		return err
+	}
+	fmt.Println("Migrations applied successfully.")
+	return nil
+}
+
 func main() {
+	// CLI flags
+	configPath := pflag.StringP("config", "c", "config.yaml", "Path to config file")
+	migrate := pflag.BoolP("migrate", "m", false, "Run database migrations and exit")
+	version := pflag.BoolP("version", "v", false, "Print version and exit")
+	port := pflag.IntP("port", "p", 8080, "HTTP server listen port")
+	logLevel := pflag.StringP("log-level", "l", "info", "Log level (debug, info, warn, error)")
+	masterToken := pflag.String("master-token", "", "Override master token from config")
+	jwtSecret := pflag.String("jwt-secret", "", "Override JWT secret from config")
+
+	pflag.Parse()
+
+	if *version {
+		fmt.Println("qhronosd version 1.0.0")
+		os.Exit(0)
+	}
+
+	if *migrate {
+		cfg, err := config.LoadWithPath(*configPath)
+		if err != nil {
+			panic("Failed to load configuration: " + err.Error())
+		}
+		err = runMigrations(cfg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Migration failed: %v\n", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 
 	// Load configuration
-	var cfg, err = config.Load()
+	cfg, err := config.LoadWithPath(*configPath)
 	if err != nil {
 		panic("Failed to load configuration: " + err.Error())
+	}
+
+	// Override config with CLI flags if set
+	if pflag.Lookup("port").Changed {
+		cfg.Server.Port = *port
+	}
+	if pflag.Lookup("log-level").Changed {
+		cfg.Logging.Level = *logLevel
+	}
+	if pflag.Lookup("master-token").Changed && *masterToken != "" {
+		cfg.Auth.MasterToken = *masterToken
+	}
+	if pflag.Lookup("jwt-secret").Changed && *jwtSecret != "" {
+		cfg.Auth.JWTSecret = *jwtSecret
 	}
 
 	// Initialize logger

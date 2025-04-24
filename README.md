@@ -47,9 +47,14 @@ docker-compose up
 ```
 The API will be available at `http://localhost:8080`.
 
-### Run Locally (Go)
+### Build and Run from Binary
 ```sh
-go run ./cmd/main.go
+make build
+./bin/qhronosd --config config.yaml
+```
+You can use CLI flags to override config values, e.g.:
+```sh
+./bin/qhronosd --port 9090 --log-level debug
 ```
 
 ### Configuration Setup
@@ -60,7 +65,7 @@ Before running Qhronos, set up your configuration:
    cp config.example.yaml config.yaml
    ```
 2. Edit `config.yaml` to match your environment (database, Redis, auth secrets, etc).
-3. Alternatively, you can override any config value using environment variables (see comments in `config.example.yaml`).
+3. You can also override any config value using CLI flags (see above).
 
 ### Database Setup & Migration
 Before running Qhronos for the first time, initialize the PostgreSQL database and apply migrations:
@@ -69,53 +74,28 @@ Before running Qhronos for the first time, initialize the PostgreSQL database an
    ```sh
    docker-compose up -d postgres redis
    ```
-2. Run database migrations:
+2. Run database migrations using the binary:
    ```sh
-   ./scripts/migrate.sh up
+   ./bin/qhronosd --migrate --config config.yaml
    ```
-   Or, if you use Docker Compose, the migrations may run automatically on startup.
 
 This will create all required tables and schema in your database.
 
 ## Database Migration
 
-Qhronos uses a custom migration script to manage database schema changes. You can apply or roll back migrations using:
+Qhronos manages database schema changes using embedded migration files. You can apply all migrations using:
 
 ```sh
-./scripts/migrate.sh up [N]
-./scripts/migrate.sh down [N]
+./bin/qhronosd --migrate --config config.yaml
 ```
 
-- `up [N]`: Apply migrations. If you specify `N`, it will apply up to `N` new migrations. If you omit `N`, it will apply all pending migrations.
-- `down [N]`: Roll back migrations. If you specify `N`, it will roll back the last `N` applied migrations. If you omit `N`, it will roll back just the last migration.
-
-### Examples
-
-Apply all pending migrations:
-```sh
-./scripts/migrate.sh up
-```
-
-Apply only the next migration (one step):
-```sh
-./scripts/migrate.sh up 1
-```
-
-Roll back the last migration:
-```sh
-./scripts/migrate.sh down
-```
-
-Roll back the last 2 migrations:
-```sh
-./scripts/migrate.sh down 2
-```
+- This will apply all pending migrations to your database.
+- You can use any CLI flags to override config values (e.g., DB host, port, user).
 
 ### Notes
-- The script uses Docker Compose to connect to the `qhronos_db` container.
-- It tracks applied migrations in a `schema_migrations` table.
+- Migration files are embedded in the binary; no external migration tool is needed.
+- The binary manages a `schema_migrations` table to track applied migrations.
 - Migration files should be named with incremental prefixes (e.g., `001_initial_schema.sql`, `002_add_table.sql`, etc.).
-- For rollbacks, you need a corresponding down migration file (e.g., `001_down.sql` for `001_initial_schema.sql`).
 
 ## API Usage
 See [API documentation](docs/api.md) for full details.
@@ -183,6 +163,34 @@ This schedules the event to occur every Monday and Friday.
 - Supports Docker, Docker Compose, and Kubernetes.
 - See [deployment guide](docs/deployment.md) for production tips.
 
+## Docker Usage
+
+You can build and run Qhronos using Docker:
+
+### Build the Docker image
+```sh
+make docker-build
+# or
+# docker build -t qhronosd:latest .
+```
+
+### Run the Docker container
+```sh
+docker run -p 8080:8080 qhronosd:latest
+```
+
+### Override configuration
+- **Custom config file:**
+  ```sh
+  docker run -v /path/to/your/config.yaml:/app/config.yaml -p 8080:8080 qhronosd:latest
+  ```
+- **CLI flags (recommended):**
+  ```sh
+  docker run qhronosd:latest --port 9090 --log-level debug
+  ```
+
+You can combine these methods as needed.
+
 ## Authentication
 - Use a master token or generate JWTs via the `/tokens` endpoint.
 - See [docs/auth.md](docs/auth.md) for details.
@@ -203,28 +211,3 @@ Qhronos supports JWT (JSON Web Token) authentication for secure, scoped API acce
       "expires_at": "2024-12-31T23:59:59Z"
     }'
   ```
-- **Using a JWT Token:**
-  Pass the JWT in the `Authorization` header for all API requests:
-  ```sh
-  curl -H "Authorization: Bearer <your-jwt-token>" http://localhost:8080/events
-  ```
-
-## Contributing
-- PRs welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md).
-- Follow Go best practices and write tests for new features.
-
-## Testing
-```sh
-go test ./...
-```
-
-## Troubleshooting & FAQ
-- See [FAQ](docs/faq.md) for common issues and solutions.
-
-## License
-MIT. See [LICENSE](LICENSE).
-
-## Links & References
-- [Design Document](design.md)
-- [API Docs](docs/api.md)
-- [Website](#) 

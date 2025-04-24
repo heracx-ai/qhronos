@@ -188,3 +188,51 @@ func ParseFlexibleDuration(s string) (time.Duration, error) {
 	}
 	return time.ParseDuration(s)
 }
+
+// LoadWithPath loads configuration from a specific file path
+func LoadWithPath(path string) (*Config, error) {
+	if path == "" {
+		return Load()
+	}
+	viper.SetConfigFile(path)
+	viper.SetConfigType("yaml")
+
+	// Set default values (same as in Load)
+	viper.SetDefault("server.port", 8080)
+	viper.SetDefault("server.timeout", "30s")
+	viper.SetDefault("database.host", "localhost")
+	viper.SetDefault("database.port", 5432)
+	viper.SetDefault("database.user", "postgres")
+	viper.SetDefault("database.password", "postgres")
+	viper.SetDefault("database.dbname", "qhronos")
+	viper.SetDefault("database.sslmode", "disable")
+	viper.SetDefault("redis.host", "localhost")
+	viper.SetDefault("redis.port", 6379)
+	viper.SetDefault("redis.password", "")
+	viper.SetDefault("redis.db", 0)
+	viper.SetDefault("hmac.default_secret", "qhronos.io")
+	viper.SetDefault("scheduler.look_ahead_duration", "24h")
+	viper.SetDefault("scheduler.expansion_interval", "5m")
+	viper.SetDefault("retention.events", "30d")
+	viper.SetDefault("retention.occurrences", "7d")
+	viper.SetDefault("retention.cleanup_interval", "1h")
+	viper.SetDefault("archival.check_period", "1h")
+	viper.SetDefault("logging.level", "info")
+	viper.SetDefault("logging.file_path", "qhronos.log")
+	viper.SetDefault("logging.max_size", 10)
+	viper.SetDefault("logging.max_backups", 3)
+	viper.SetDefault("logging.max_age", 7)
+
+	viper.AutomaticEnv()
+
+	if err := viper.ReadInConfig(); err != nil {
+		return nil, err
+	}
+
+	config := &Config{}
+	if err := viper.Unmarshal(config); err != nil {
+		return nil, err
+	}
+
+	return config, nil
+}

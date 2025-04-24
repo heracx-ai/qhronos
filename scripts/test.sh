@@ -6,9 +6,6 @@ set -e
 # Print commands
 set -x
 
-# Start PostgreSQL and Redis containers
-docker-compose up -d postgres redis
-
 # Wait for PostgreSQL to be ready
 echo "Waiting for PostgreSQL to be ready..."
 until docker exec qhronos_db pg_isready -U postgres; do
@@ -56,4 +53,4 @@ go test -v -race ./...
 
 # Clean up
 echo "Cleaning up..."
-docker-compose down 
+# docker-compose down (removed) 

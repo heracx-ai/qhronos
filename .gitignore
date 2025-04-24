@@ -35,4 +35,7 @@ config.*.yaml
 # Data directories
 data/
 data/postgres/
-data/redis/ 
+data/redis/
+
+# Binaries directory
+bin/ 
