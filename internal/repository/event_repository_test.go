@@ -48,7 +48,7 @@ func TestEventRepository(t *testing.T) {
 			Name:        "Test Event",
 			Description: "Test Description",
 			StartTime:   time.Now(),
-			WebhookURL:  "https://example.com/webhook",
+			Webhook:     "https://example.com/webhook",
 			Metadata:    datatypes.JSON([]byte(`{"key": "value"}`)),
 			Schedule: &models.ScheduleConfig{
 				Frequency: "weekly",
@@ -71,7 +71,7 @@ func TestEventRepository(t *testing.T) {
 		assert.Equal(t, event.Name, retrieved.Name)
 		assert.Equal(t, event.Description, retrieved.Description)
 		assert.Equal(t, event.StartTime.Unix(), retrieved.StartTime.Unix())
-		assert.Equal(t, event.WebhookURL, retrieved.WebhookURL)
+		assert.Equal(t, event.Webhook, retrieved.Webhook)
 		assertJSONEqual(t, event.Metadata, retrieved.Metadata)
 		assert.Equal(t, event.Schedule, retrieved.Schedule)
 		assert.Equal(t, event.Tags, retrieved.Tags)
@@ -85,7 +85,7 @@ func TestEventRepository(t *testing.T) {
 			Name:        "Test Event",
 			Description: "Test Description",
 			StartTime:   time.Now(),
-			WebhookURL:  "https://example.com/webhook",
+			Webhook:     "https://example.com/webhook",
 			Metadata:    datatypes.JSON([]byte(`{"key": "value"}`)),
 			Schedule: &models.ScheduleConfig{
 				Frequency: "weekly",
@@ -103,7 +103,7 @@ func TestEventRepository(t *testing.T) {
 		// Update event
 		event.Name = "Updated Event"
 		event.Description = "Updated Description"
-		event.WebhookURL = "https://example.com/updated"
+		event.Webhook = "https://example.com/updated"
 		event.Metadata = datatypes.JSON([]byte(`{"key": "updated"}`))
 		event.Schedule = &models.ScheduleConfig{
 			Frequency: "weekly",
@@ -123,7 +123,7 @@ func TestEventRepository(t *testing.T) {
 
 		assert.Equal(t, "Updated Event", retrieved.Name)
 		assert.Equal(t, "Updated Description", retrieved.Description)
-		assert.Equal(t, "https://example.com/updated", retrieved.WebhookURL)
+		assert.Equal(t, "https://example.com/updated", retrieved.Webhook)
 		assertJSONEqual(t, datatypes.JSON([]byte(`{"key": "updated"}`)), retrieved.Metadata)
 		assert.Equal(t, event.Schedule, retrieved.Schedule)
 		assert.Equal(t, pq.StringArray{"updated"}, retrieved.Tags)
@@ -137,7 +137,7 @@ func TestEventRepository(t *testing.T) {
 			Name:        "Test Event",
 			Description: "Test Description",
 			StartTime:   time.Now(),
-			WebhookURL:  "https://example.com/webhook",
+			Webhook:     "https://example.com/webhook",
 			Metadata:    datatypes.JSON([]byte(`{"key": "value"}`)),
 			Schedule: &models.ScheduleConfig{
 				Frequency: "weekly",
@@ -169,7 +169,7 @@ func TestEventRepository(t *testing.T) {
 				Name:        "Event 1",
 				Description: "Description 1",
 				StartTime:   time.Now(),
-				WebhookURL:  "https://example.com/webhook1",
+				Webhook:     "https://example.com/webhook1",
 				Metadata:    datatypes.JSON([]byte(`{"key": "value1"}`)),
 				Schedule: &models.ScheduleConfig{
 					Frequency: "weekly",
@@ -185,7 +185,7 @@ func TestEventRepository(t *testing.T) {
 				Name:        "Event 2",
 				Description: "Description 2",
 				StartTime:   time.Now().Add(time.Hour),
-				WebhookURL:  "https://example.com/webhook2",
+				Webhook:     "https://example.com/webhook2",
 				Metadata:    datatypes.JSON([]byte(`{"key": "value2"}`)),
 				Schedule: &models.ScheduleConfig{
 					Frequency: "weekly",
@@ -218,7 +218,7 @@ func TestEventRepository(t *testing.T) {
 				Name:        "Event 1",
 				Description: "Description 1",
 				StartTime:   time.Now(),
-				WebhookURL:  "https://example.com/webhook1",
+				Webhook:     "https://example.com/webhook1",
 				Metadata:    datatypes.JSON([]byte(`{"key": "value1"}`)),
 				Schedule: &models.ScheduleConfig{
 					Frequency: "weekly",
@@ -234,7 +234,7 @@ func TestEventRepository(t *testing.T) {
 				Name:        "Event 2",
 				Description: "Description 2",
 				StartTime:   time.Now(),
-				WebhookURL:  "https://example.com/webhook2",
+				Webhook:     "https://example.com/webhook2",
 				Metadata:    datatypes.JSON([]byte(`{"key": "value2"}`)),
 				Schedule: &models.ScheduleConfig{
 					Frequency: "weekly",
@@ -278,7 +278,7 @@ func TestEventRepository(t *testing.T) {
 			Name:        "Event to Delete",
 			Description: "Test Description",
 			StartTime:   time.Now(),
-			WebhookURL:  "https://example.com/webhook",
+			Webhook:     "https://example.com/webhook",
 			Metadata:    datatypes.JSON([]byte(`{"key": "value"}`)),
 			Schedule: &models.ScheduleConfig{
 				Frequency: "weekly",
@@ -315,7 +315,7 @@ func TestEventRepository(t *testing.T) {
 			Name:        "Event with Occurrences",
 			Description: "Test Description",
 			StartTime:   time.Now(),
-			WebhookURL:  "https://example.com/webhook",
+			Webhook:     "https://example.com/webhook",
 			Metadata:    datatypes.JSON([]byte(`{"key": "value"}`)),
 			Schedule: &models.ScheduleConfig{
 				Frequency: "weekly",
@@ -366,7 +366,7 @@ func TestEventRepository(t *testing.T) {
 			Name:        "Event to Delete",
 			Description: "Test Description",
 			StartTime:   time.Now(),
-			WebhookURL:  "https://example.com/webhook",
+			Webhook:     "https://example.com/webhook",
 			Metadata:    datatypes.JSON([]byte(`{"key": "value"}`)),
 			Schedule: &models.ScheduleConfig{
 				Frequency: "weekly",
@@ -407,7 +407,7 @@ func TestDeleteOldEvents(t *testing.T) {
 		Name:        "Old Event",
 		Description: "This is an old event",
 		StartTime:   time.Now().Add(-48 * time.Hour),
-		WebhookURL:  "http://example.com",
+		Webhook:     "http://example.com",
 		Metadata:    datatypes.JSON([]byte(`{"key": "value"}`)),
 		Tags:        pq.StringArray{"test"},
 		Status:      models.EventStatusActive,
@@ -420,7 +420,7 @@ func TestDeleteOldEvents(t *testing.T) {
 		Name:        "Recent Event",
 		Description: "This is a recent event",
 		StartTime:   time.Now().Add(-12 * time.Hour),
-		WebhookURL:  "http://example.com",
+		Webhook:     "http://example.com",
 		Metadata:    datatypes.JSON([]byte(`{"key": "value"}`)),
 		Tags:        pq.StringArray{"test"},
 		Status:      models.EventStatusActive,
@@ -476,7 +476,7 @@ func TestDeleteOldOccurrences(t *testing.T) {
 		Name:        "Test Event",
 		Description: "Test event for occurrences",
 		StartTime:   time.Now(),
-		WebhookURL:  "http://example.com",
+		Webhook:     "http://example.com",
 		Metadata:    datatypes.JSON([]byte(`{"key": "value"}`)),
 		Tags:        pq.StringArray{"test"},
 		Status:      models.EventStatusActive,
@@ -551,7 +551,7 @@ func TestArchiveOldData(t *testing.T) {
 		Name:        "Old Event",
 		Description: "Should be archived",
 		StartTime:   time.Now().Add(-48 * time.Hour),
-		WebhookURL:  "https://example.com/webhook",
+		Webhook:     "https://example.com/webhook",
 		Metadata:    datatypes.JSON([]byte(`{"key": "value"}`)),
 		Schedule:    &models.ScheduleConfig{Frequency: "daily", Interval: 1},
 		Tags:        pq.StringArray{"archive"},

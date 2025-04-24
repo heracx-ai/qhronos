@@ -110,7 +110,7 @@ curl -X POST http://localhost:8080/events \
   -d '{
     "name": "Daily Backup",
     "start_time": "2024-03-20T00:00:00Z",
-    "webhook_url": "https://example.com/webhook",
+    "webhook": "https://example.com/webhook",
     "schedule": {
       "frequency": "weekly",
       "interval": 1,
@@ -131,7 +131,7 @@ If you omit the `schedule` field, the event will be scheduled only once at the s
   "name": "One-Time Event",
   "description": "This event happens only once.",
   "start_time": "2024-05-01T10:00:00Z",
-  "webhook_url": "https://example.com/webhook",
+  "webhook": "https://example.com/webhook",
   "metadata": {},
   "tags": ["single"]
   // No "schedule" field!

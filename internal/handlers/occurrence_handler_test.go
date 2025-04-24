@@ -52,7 +52,7 @@ func TestOccurrenceHandler(t *testing.T) {
 			Name:        "Test Event",
 			Description: "Test Description",
 			StartTime:   time.Now(),
-			WebhookURL:  "https://example.com/webhook",
+			Webhook:     "https://example.com/webhook",
 			Metadata:    datatypes.JSON([]byte(`{"key": "value"}`)),
 			Schedule: &models.ScheduleConfig{
 				Frequency: "weekly",
@@ -122,7 +122,7 @@ func TestOccurrenceHandler(t *testing.T) {
 				Name:        "Event 1",
 				Description: "Description 1",
 				StartTime:   time.Now(),
-				WebhookURL:  "https://example.com/webhook1",
+				Webhook:     "https://example.com/webhook1",
 				Metadata:    datatypes.JSON([]byte(`{"key": "value1"}`)),
 				Schedule: &models.ScheduleConfig{
 					Frequency: "weekly",
@@ -138,7 +138,7 @@ func TestOccurrenceHandler(t *testing.T) {
 				Name:        "Event 2",
 				Description: "Description 2",
 				StartTime:   time.Now(),
-				WebhookURL:  "https://example.com/webhook2",
+				Webhook:     "https://example.com/webhook2",
 				Metadata:    datatypes.JSON([]byte(`{"key": "value2"}`)),
 				Schedule: &models.ScheduleConfig{
 					Frequency: "weekly",
@@ -212,7 +212,7 @@ func TestOccurrenceHandler(t *testing.T) {
 			Name:        "Test Event",
 			Description: "Test Description",
 			StartTime:   time.Now(),
-			WebhookURL:  "https://example.com/webhook",
+			Webhook:     "https://example.com/webhook",
 			Metadata:    datatypes.JSON([]byte(`{"key": "value"}`)),
 			Schedule: &models.ScheduleConfig{
 				Frequency: "weekly",
@@ -266,7 +266,7 @@ func TestOccurrenceHandler(t *testing.T) {
 				Name:        "Event 1",
 				Description: "Description 1",
 				StartTime:   time.Now(),
-				WebhookURL:  "https://example.com/webhook1",
+				Webhook:     "https://example.com/webhook1",
 				Metadata:    datatypes.JSON([]byte(`{"key": "value1"}`)),
 				Schedule: &models.ScheduleConfig{
 					Frequency: "weekly",
@@ -282,7 +282,7 @@ func TestOccurrenceHandler(t *testing.T) {
 				Name:        "Event 2",
 				Description: "Description 2",
 				StartTime:   time.Now(),
-				WebhookURL:  "https://example.com/webhook2",
+				Webhook:     "https://example.com/webhook2",
 				Metadata:    datatypes.JSON([]byte(`{"key": "value2"}`)),
 				Schedule: &models.ScheduleConfig{
 					Frequency: "weekly",

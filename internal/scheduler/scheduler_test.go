@@ -40,7 +40,7 @@ func TestScheduler(t *testing.T) {
 			Name:        "Test Event",
 			Description: "Test Description",
 			StartTime:   time.Now(),
-			WebhookURL:  "https://example.com/webhook",
+			Webhook:     "https://example.com/webhook",
 			Metadata:    datatypes.JSON([]byte(`{"key": "value"}`)),
 			Schedule: &models.ScheduleConfig{
 				Frequency: "daily",
@@ -80,7 +80,7 @@ func TestScheduler(t *testing.T) {
 			Name:        "Test Event",
 			Description: "Test Description",
 			StartTime:   time.Now(),
-			WebhookURL:  "http://example.com",
+			Webhook:     "http://example.com",
 			Status:      models.EventStatusActive,
 			Metadata:    datatypes.JSON([]byte(`{"key": "value"}`)),
 			Schedule: &models.ScheduleConfig{
@@ -156,7 +156,7 @@ func TestScheduler(t *testing.T) {
 			Name:        "Recurring Event",
 			Description: "Test Description",
 			StartTime:   time.Now(),
-			WebhookURL:  "http://example.com",
+			Webhook:     "http://example.com",
 			Schedule: &models.ScheduleConfig{
 				Frequency: "daily",
 				Interval:  1,
@@ -199,7 +199,7 @@ func TestScheduler(t *testing.T) {
 			Name:        "Sync Test Event",
 			Description: "Test Description",
 			StartTime:   time.Now(),
-			WebhookURL:  "http://example.com",
+			Webhook:     "http://example.com",
 			Status:      models.EventStatusActive,
 			Metadata:    datatypes.JSON([]byte(`{"key": "value"}`)),
 			Schedule: &models.ScheduleConfig{

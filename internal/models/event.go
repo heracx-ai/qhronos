@@ -62,7 +62,7 @@ type Event struct {
 	Name        string          `json:"name" db:"name"`
 	Description string          `json:"description" db:"description"`
 	StartTime   time.Time       `json:"start_time" db:"start_time"`
-	WebhookURL  string          `json:"webhook_url" db:"webhook_url"`
+	Webhook     string          `json:"webhook" db:"webhook"`
 	Metadata    datatypes.JSON  `json:"metadata" db:"metadata"`
 	Schedule    *ScheduleConfig `json:"schedule,omitempty" db:"schedule"`
 	Tags        pq.StringArray  `json:"tags" db:"tags"`
@@ -76,7 +76,7 @@ type CreateEventRequest struct {
 	Name        string          `json:"name" validate:"required"`
 	Description string          `json:"description"`
 	StartTime   time.Time       `json:"start_time" validate:"required"`
-	WebhookURL  string          `json:"webhook_url" validate:"required,url"`
+	Webhook     string          `json:"webhook" validate:"required"`
 	Metadata    datatypes.JSON  `json:"metadata" validate:"required"`
 	Schedule    *ScheduleConfig `json:"schedule,omitempty"`
 	Tags        []string        `json:"tags"`
@@ -87,7 +87,7 @@ type UpdateEventRequest struct {
 	Name        *string         `json:"name,omitempty"`
 	Description *string         `json:"description,omitempty"`
 	StartTime   *time.Time      `json:"start_time,omitempty"`
-	WebhookURL  *string         `json:"webhook_url,omitempty"`
+	Webhook     *string         `json:"webhook,omitempty"`
 	Metadata    datatypes.JSON  `json:"metadata,omitempty"`
 	Schedule    *ScheduleConfig `json:"schedule,omitempty"`
 	Tags        []string        `json:"tags,omitempty"`

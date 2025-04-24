@@ -37,8 +37,8 @@ func (h *EventHandler) CreateEvent(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "name is required"})
 		return
 	}
-	if req.WebhookURL == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "webhook_url is required"})
+	if req.Webhook == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "webhook is required"})
 		return
 	}
 	if req.StartTime.IsZero() {
@@ -65,7 +65,7 @@ func (h *EventHandler) CreateEvent(c *gin.Context) {
 		Name:        req.Name,
 		Description: req.Description,
 		StartTime:   req.StartTime,
-		WebhookURL:  req.WebhookURL,
+		Webhook:     req.Webhook,
 		Metadata:    req.Metadata,
 		Schedule:    req.Schedule,
 		Tags:        pq.StringArray(req.Tags),
@@ -132,8 +132,8 @@ func (h *EventHandler) UpdateEvent(c *gin.Context) {
 	if req.StartTime != nil {
 		event.StartTime = *req.StartTime
 	}
-	if req.WebhookURL != nil {
-		event.WebhookURL = *req.WebhookURL
+	if req.Webhook != nil {
+		event.Webhook = *req.Webhook
 	}
 	if req.Metadata != nil {
 		event.Metadata = req.Metadata

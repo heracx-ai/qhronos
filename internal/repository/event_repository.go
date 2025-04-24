@@ -31,7 +31,7 @@ func timePtr(t time.Time) *time.Time {
 
 func (r *EventRepository) Create(ctx context.Context, event *models.Event) error {
 	query := `
-		INSERT INTO events (id, name, description, schedule, start_time, metadata, webhook_url, tags, status, created_at, updated_at)
+		INSERT INTO events (id, name, description, schedule, start_time, metadata, webhook, tags, status, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING id`
 
@@ -52,7 +52,7 @@ func (r *EventRepository) Create(ctx context.Context, event *models.Event) error
 		event.Schedule,
 		event.StartTime,
 		event.Metadata,
-		event.WebhookURL,
+		event.Webhook,
 		event.Tags,
 		event.Status,
 		event.CreatedAt,
@@ -68,7 +68,7 @@ func (r *EventRepository) Create(ctx context.Context, event *models.Event) error
 
 func (r *EventRepository) GetByID(ctx context.Context, id uuid.UUID) (*models.Event, error) {
 	query := `
-		SELECT id, name, description, schedule, start_time, metadata, webhook_url, tags, status, created_at, updated_at
+		SELECT id, name, description, schedule, start_time, metadata, webhook, tags, status, created_at, updated_at
 		FROM events
 		WHERE id = $1`
 
@@ -86,7 +86,7 @@ func (r *EventRepository) GetByID(ctx context.Context, id uuid.UUID) (*models.Ev
 
 func (r *EventRepository) List(ctx context.Context) ([]models.Event, error) {
 	query := `
-		SELECT id, name, description, schedule, start_time, metadata, webhook_url, tags, status, created_at, updated_at
+		SELECT id, name, description, schedule, start_time, metadata, webhook, tags, status, created_at, updated_at
 		FROM events
 		ORDER BY created_at DESC`
 
@@ -102,7 +102,7 @@ func (r *EventRepository) List(ctx context.Context) ([]models.Event, error) {
 func (r *EventRepository) Update(ctx context.Context, event *models.Event) error {
 	query := `
 		UPDATE events
-		SET name = $1, description = $2, schedule = $3, start_time = $4, metadata = $5, webhook_url = $6, tags = $7, status = $8, updated_at = $9
+		SET name = $1, description = $2, schedule = $3, start_time = $4, metadata = $5, webhook = $6, tags = $7, status = $8, updated_at = $9
 		WHERE id = $10
 		RETURNING id`
 
@@ -114,7 +114,7 @@ func (r *EventRepository) Update(ctx context.Context, event *models.Event) error
 		event.Schedule,
 		event.StartTime,
 		event.Metadata,
-		event.WebhookURL,
+		event.Webhook,
 		event.Tags,
 		event.Status,
 		event.UpdatedAt,
@@ -195,7 +195,7 @@ func (r *EventRepository) removeEventOccurrencesFromRedis(ctx context.Context, e
 
 func (r *EventRepository) ListByTags(ctx context.Context, tags []string) ([]*models.Event, error) {
 	query := `
-		SELECT id, name, description, schedule, start_time, metadata, webhook_url, tags, status, created_at, updated_at
+		SELECT id, name, description, schedule, start_time, metadata, webhook, tags, status, created_at, updated_at
 		FROM events 
 		WHERE tags && $1
 		ORDER BY created_at DESC
@@ -239,7 +239,7 @@ func (r *EventRepository) DeleteOldOccurrences(ctx context.Context, cutoff time.
 
 func (r *EventRepository) ListActive(ctx context.Context) ([]*models.Event, error) {
 	query := `
-		SELECT id, name, description, schedule, start_time, metadata, webhook_url, tags, status, created_at, updated_at
+		SELECT id, name, description, schedule, start_time, metadata, webhook, tags, status, created_at, updated_at
 		FROM events
 		WHERE status = $1
 		ORDER BY created_at DESC`
@@ -308,7 +308,7 @@ func (r *EventRepository) GetOccurrenceByID(ctx context.Context, id int) (*model
 func (r *EventRepository) CreateEvent(ctx context.Context, event *models.Event) error {
 	query := `
 		INSERT INTO events (
-			id, name, description, start_time, webhook_url, 
+			id, name, description, start_time, webhook, 
 			metadata, schedule, tags, status, hmac_secret
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10
@@ -329,7 +329,7 @@ func (r *EventRepository) CreateEvent(ctx context.Context, event *models.Event) 
 		event.Name,
 		event.Description,
 		event.StartTime,
-		event.WebhookURL,
+		event.Webhook,
 		event.Metadata,
 		scheduleJSON,
 		pq.Array(event.Tags),
@@ -345,7 +345,7 @@ func (r *EventRepository) CreateEvent(ctx context.Context, event *models.Event) 
 
 func (r *EventRepository) GetEvent(ctx context.Context, id string) (*models.Event, error) {
 	query := `
-		SELECT id, name, description, start_time, webhook_url, 
+		SELECT id, name, description, start_time, webhook, 
 			metadata, schedule, tags, status, hmac_secret, created_at, updated_at
 		FROM events
 		WHERE id = $1
@@ -358,7 +358,7 @@ func (r *EventRepository) GetEvent(ctx context.Context, id string) (*models.Even
 		&event.Name,
 		&event.Description,
 		&event.StartTime,
-		&event.WebhookURL,
+		&event.Webhook,
 		&event.Metadata,
 		&scheduleJSON,
 		pq.Array(&event.Tags),
@@ -387,7 +387,7 @@ func (r *EventRepository) GetEvent(ctx context.Context, id string) (*models.Even
 
 func (r *EventRepository) ListEvents(ctx context.Context, filter models.EventFilter) ([]*models.Event, error) {
 	query := `
-		SELECT id, name, description, start_time, webhook_url, 
+		SELECT id, name, description, start_time, webhook, 
 			metadata, schedule, tags, status, hmac_secret, created_at, updated_at
 		FROM events
 		WHERE 1=1
@@ -436,7 +436,7 @@ func (r *EventRepository) ListEvents(ctx context.Context, filter models.EventFil
 			&event.Name,
 			&event.Description,
 			&event.StartTime,
-			&event.WebhookURL,
+			&event.Webhook,
 			&event.Metadata,
 			&scheduleJSON,
 			pq.Array(&event.Tags),

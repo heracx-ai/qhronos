@@ -34,7 +34,7 @@ func TestOccurrenceRepository(t *testing.T) {
 			Name:        "Test Event",
 			Description: "Test Description",
 			StartTime:   time.Now(),
-			WebhookURL:  "https://example.com/webhook",
+			Webhook:     "https://example.com/webhook",
 			Metadata:    []byte(`{"key": "value"}`),
 			Schedule: &models.ScheduleConfig{
 				Frequency: "weekly",
@@ -79,7 +79,7 @@ func TestOccurrenceRepository(t *testing.T) {
 			Name:        "Test Event",
 			Description: "Test Description",
 			StartTime:   time.Now(),
-			WebhookURL:  "https://example.com/webhook",
+			Webhook:     "https://example.com/webhook",
 			Metadata:    []byte(`{"key": "value"}`),
 			Schedule: &models.ScheduleConfig{
 				Frequency: "weekly",

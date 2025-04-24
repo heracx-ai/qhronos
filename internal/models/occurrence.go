@@ -53,7 +53,7 @@ type Schedule struct {
 	Occurrence
 	Name        string         `json:"name"`
 	Description string         `json:"description"`
-	WebhookURL  string         `json:"webhook_url"`
+	Webhook     string         `json:"webhook"`
 	Metadata    datatypes.JSON `json:"metadata"`
 	Tags        pq.StringArray `json:"tags"`
 	// Add more event fields here if needed for dispatch

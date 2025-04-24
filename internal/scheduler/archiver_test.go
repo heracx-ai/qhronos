@@ -33,7 +33,7 @@ func TestArchivalScheduler(t *testing.T) {
 		Name:        "Old Event",
 		Description: "Should be archived",
 		StartTime:   time.Now().Add(-48 * time.Hour),
-		WebhookURL:  "https://example.com/webhook",
+		Webhook:     "https://example.com/webhook",
 		Metadata:    datatypes.JSON([]byte(`{"key": "value"}`)),
 		Schedule:    &models.ScheduleConfig{Frequency: "daily", Interval: 1},
 		Tags:        pq.StringArray{"archive"},

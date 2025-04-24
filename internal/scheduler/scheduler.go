@@ -38,7 +38,7 @@ func (s *Scheduler) ScheduleEvent(ctx context.Context, occurrence *models.Occurr
 		Occurrence:  *occurrence,
 		Name:        event.Name,
 		Description: event.Description,
-		WebhookURL:  event.WebhookURL,
+		Webhook:     event.Webhook,
 		Metadata:    event.Metadata,
 		Tags:        event.Tags,
 	}

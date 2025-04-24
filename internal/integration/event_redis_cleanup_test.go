@@ -32,7 +32,7 @@ func TestEventRepository_RedisCleanupOnDelete(t *testing.T) {
 		Name:        "Event for Redis Cleanup",
 		Description: "Test",
 		StartTime:   time.Now(),
-		WebhookURL:  "http://example.com",
+		Webhook:     "http://example.com",
 		Status:      models.EventStatusActive,
 		Metadata:    []byte(`{"key": "value"}`),
 		Tags:        pq.StringArray{"test"},

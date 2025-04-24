@@ -44,7 +44,7 @@ CREATE TABLE events (
     name TEXT NOT NULL,
     description TEXT,
     start_time TIMESTAMP WITH TIME ZONE NOT NULL,
-    webhook_url TEXT NOT NULL,
+    webhook TEXT NOT NULL,
     metadata JSONB NOT NULL DEFAULT '{}',
     schedule JSONB,
     tags TEXT[] NOT NULL DEFAULT '{}',
@@ -147,7 +147,7 @@ CREATE TABLE archived_events (
     name TEXT NOT NULL,
     description TEXT,
     start_time TIMESTAMPTZ NOT NULL,
-    webhook_url TEXT NOT NULL,
+    webhook TEXT NOT NULL,
     metadata JSONB NOT NULL DEFAULT '{}',
     schedule JSONB,
     tags TEXT[] NOT NULL DEFAULT '{}',
@@ -210,11 +210,11 @@ BEGIN
 
     -- Archive events that have no active occurrences (do not specify SERIAL id)
     INSERT INTO archived_events (
-        event_id, name, description, start_time, webhook_url, metadata,
+        event_id, name, description, start_time, webhook, metadata,
         schedule, tags, status, hmac_secret, created_at, updated_at, archived_at
     )
     SELECT 
-        id, name, description, start_time, webhook_url, metadata,
+        id, name, description, start_time, webhook, metadata,
         schedule, tags, status, hmac_secret, created_at, updated_at, now()
     FROM events e
     WHERE NOT EXISTS (

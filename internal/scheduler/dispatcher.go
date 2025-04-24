@@ -94,7 +94,7 @@ func (d *Dispatcher) DispatchWebhook(ctx context.Context, sched *models.Schedule
 	}
 
 	// Create base request (will be cloned for each attempt)
-	baseReq, err := http.NewRequestWithContext(ctx, "POST", sched.WebhookURL, nil)
+	baseReq, err := http.NewRequestWithContext(ctx, "POST", sched.Webhook, nil)
 	if err != nil {
 		return fmt.Errorf("error creating request: %w", err)
 	}

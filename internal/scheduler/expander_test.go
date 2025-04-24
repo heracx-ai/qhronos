@@ -58,7 +58,7 @@ func TestEventExpander(t *testing.T) {
 			Name:        "Test Event",
 			Description: "Test Description",
 			StartTime:   startTime,
-			WebhookURL:  "http://example.com",
+			Webhook:     "http://example.com",
 			Schedule:    scheduleConfig,
 			Status:      models.EventStatusActive,
 			Metadata:    []byte(`{"key": "value"}`),
@@ -111,7 +111,7 @@ func TestEventExpander(t *testing.T) {
 			Name:        "Test Event",
 			Description: "Test Description",
 			StartTime:   time.Now().Add(1 * time.Hour),
-			WebhookURL:  "http://example.com",
+			Webhook:     "http://example.com",
 			Schedule:    nil, // Simulate missing/invalid schedule
 			Status:      models.EventStatusActive,
 			Metadata:    []byte(`{"key": "value"}`),
@@ -148,7 +148,7 @@ func TestEventExpander(t *testing.T) {
 			Name:        "Non-Recurring Event",
 			Description: "Should schedule one occurrence",
 			StartTime:   startTime,
-			WebhookURL:  "http://example.com",
+			Webhook:     "http://example.com",
 			Schedule:    nil, // Non-recurring
 			Status:      models.EventStatusActive,
 			Metadata:    []byte(`{"key": "value"}`),
