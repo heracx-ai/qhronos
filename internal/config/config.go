@@ -63,8 +63,9 @@ type HMACConfig struct {
 }
 
 type SchedulerConfig struct {
-	LookAheadDuration time.Duration `mapstructure:"look_ahead_duration"`
-	ExpansionInterval time.Duration `mapstructure:"expansion_interval"`
+	LookAheadDuration   time.Duration `mapstructure:"look_ahead_duration"`
+	ExpansionInterval   time.Duration `mapstructure:"expansion_interval"`
+	DispatchWorkerCount int           `mapstructure:"dispatch_worker_count"`
 }
 
 type RetentionConfig struct {

@@ -12,6 +12,7 @@ import (
 	"github.com/feedloop/qhronos/internal/models"
 	"github.com/feedloop/qhronos/internal/repository"
 	"github.com/feedloop/qhronos/internal/services"
+	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 )
 
@@ -185,36 +186,91 @@ func (d *Dispatcher) DispatchWebhook(ctx context.Context, sched *models.Schedule
 	return err
 }
 
-// Run processes due schedules and dispatches webhooks
-func (d *Dispatcher) Run(ctx context.Context, scheduler *Scheduler) error {
-	d.logger.Info("Starting dispatcher")
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
+const dispatchProcessingKey = "dispatch:processing"
 
-	for {
-		select {
-		case <-ctx.Done():
-			d.logger.Info("Dispatcher shutting down")
-			return ctx.Err()
-		case <-ticker.C:
-			// Get due schedules
-			schedules, err := scheduler.GetDueSchedules(ctx)
-			if err != nil {
-				d.logger.Error("Error getting due schedules", zap.Error(err))
-				continue
-			}
-
-			// Process each schedule
-			for _, sched := range schedules {
-				if err := d.DispatchWebhook(ctx, sched); err != nil {
-					d.logger.Error("Error dispatching webhook",
-						zap.String("occurrence_id", sched.OccurrenceID.String()),
-						zap.Error(err))
+// Run starts a pool of dispatcher workers that process the dispatch queue
+func (d *Dispatcher) Run(ctx context.Context, scheduler *Scheduler, workerCount int) error {
+	d.logger.Info("Starting dispatcher worker pool", zap.Int("worker_count", workerCount))
+	workerFn := func(workerID int) {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				d.logger.Debug("[DISPATCHER] Worker waiting for item", zap.Int("worker_id", workerID))
+				// Atomically move from queue to processing
+				data, err := scheduler.redis.BRPopLPush(ctx, dispatchQueueKey, dispatchProcessingKey, 5*time.Second).Result()
+				if err == redis.Nil {
+					d.logger.Debug("[DISPATCHER] No item found, continuing", zap.Int("worker_id", workerID))
+					continue // No item, keep waiting
+				} else if err != nil {
+					d.logger.Error("Worker failed to BRPOPLPUSH", zap.Int("worker_id", workerID), zap.Error(err))
 					continue
 				}
+				d.logger.Debug("[DISPATCHER] Worker got item from queue", zap.Int("worker_id", workerID), zap.String("data", data))
+				var sched models.Schedule
+				if err := json.Unmarshal([]byte(data), &sched); err != nil {
+					d.logger.Error("Worker failed to unmarshal schedule", zap.Int("worker_id", workerID), zap.Error(err), zap.String("data", data))
+					// Remove the bad item from processing
+					_ = scheduler.redis.LRem(ctx, dispatchProcessingKey, 1, data).Err()
+					continue
+				}
+				d.logger.Debug("[DISPATCHER] Worker unmarshalled schedule", zap.Int("worker_id", workerID), zap.Any("schedule", sched))
+				d.logger.Debug("[DISPATCHER] Worker dispatching webhook", zap.Int("worker_id", workerID), zap.String("occurrence_id", sched.OccurrenceID.String()))
+
+				// Track and increment attempt count
+				if sched.AttemptCount == 0 {
+					sched.AttemptCount = 1
+				} else {
+					sched.AttemptCount++
+				}
+
+				// Attempt dispatch
+				err = d.DispatchWebhook(ctx, &sched)
+				if err != nil {
+					d.logger.Error("Worker failed to dispatch webhook", zap.Int("worker_id", workerID), zap.String("occurrence_id", sched.OccurrenceID.String()), zap.Error(err), zap.Int("attempt_count", sched.AttemptCount))
+					// Always log failed occurrence (already done in DispatchWebhook)
+					if sched.AttemptCount >= d.maxRetries {
+						// Remove from processing queue, do not push to dead letter queue
+						queueBefore, _ := scheduler.redis.LRange(ctx, dispatchProcessingKey, 0, -1).Result()
+						d.logger.Debug("[DISPATCHER] Max retries exceeded, removing from processing queue", zap.Int("worker_id", workerID), zap.Any("queue", queueBefore), zap.String("removing", data))
+						// Use non-cancellable context for removal
+						_ = scheduler.redis.LRem(context.Background(), dispatchProcessingKey, 1, data).Err()
+						queueAfter, _ := scheduler.redis.LRange(ctx, dispatchProcessingKey, 0, -1).Result()
+						d.logger.Debug("[DISPATCHER] Processing queue after LRem (max retries)", zap.Int("worker_id", workerID), zap.Any("queue", queueAfter))
+					} else {
+						// Debug: log queue state before LSet
+						queueBeforeLSet, _ := scheduler.redis.LRange(ctx, dispatchProcessingKey, 0, -1).Result()
+						d.logger.Debug("[DISPATCHER] Processing queue before LSet (increment attempt count)", zap.Int("worker_id", workerID), zap.Any("queue", queueBeforeLSet))
+						// Update the item in the processing queue with incremented attempt count
+						updatedData, _ := json.Marshal(sched)
+						lsetErr := scheduler.redis.LSet(ctx, dispatchProcessingKey, 0, updatedData).Err() // LSet index 0: most recent item
+						if lsetErr != nil {
+							d.logger.Error("[DISPATCHER] LSet failed when incrementing attempt count", zap.Int("worker_id", workerID), zap.Error(lsetErr))
+						}
+						// Debug: log queue state after LSet
+						queueAfterLSet, _ := scheduler.redis.LRange(ctx, dispatchProcessingKey, 0, -1).Result()
+						d.logger.Debug("[DISPATCHER] Processing queue after LSet (increment attempt count)", zap.Int("worker_id", workerID), zap.Any("queue", queueAfterLSet))
+					}
+					continue
+				}
+				d.logger.Debug("[DISPATCHER] Worker successfully dispatched webhook", zap.Int("worker_id", workerID), zap.String("occurrence_id", sched.OccurrenceID.String()))
+				// On success, remove from processing queue using the exact value popped (raw JSON string)
+				queueBefore, _ := scheduler.redis.LRange(ctx, dispatchProcessingKey, 0, -1).Result()
+				d.logger.Debug("[DISPATCHER] Processing queue before LRem", zap.Int("worker_id", workerID), zap.Any("queue", queueBefore), zap.String("removing", data))
+				// Use non-cancellable context for removal
+				_ = scheduler.redis.LRem(context.Background(), dispatchProcessingKey, 1, data).Err()
+				queueAfter, _ := scheduler.redis.LRange(ctx, dispatchProcessingKey, 0, -1).Result()
+				d.logger.Debug("[DISPATCHER] Processing queue after LRem", zap.Int("worker_id", workerID), zap.Any("queue", queueAfter))
 			}
 		}
 	}
+	for i := 0; i < workerCount; i++ {
+		go workerFn(i)
+	}
+	<-ctx.Done()
+	d.logger.Info("Dispatcher worker pool shutting down")
+	return ctx.Err()
 }
 
 func timePtr(t time.Time) *time.Time {

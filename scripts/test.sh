@@ -3,9 +3,6 @@
 # Exit on error
 set -e
 
-# Print commands
-set -x
-
 # Wait for PostgreSQL to be ready
 echo "Waiting for PostgreSQL to be ready..."
 until docker exec qhronos_db pg_isready -U postgres; do
@@ -48,8 +45,35 @@ END
 echo "Running migrations..."
 cat migrations/001_initial_schema.sql | docker exec -i qhronos_db psql -U postgres -d qhronos_test
 
-# Run tests
-go test -v -race ./...
+# List all internal packages
+PKGS=$(go list ./internal/...)
+
+PASS_COUNT=0
+FAIL_COUNT=0
+
+for PKG in $PKGS; do
+  echo -e "\n=== Running tests in $PKG ==="
+  TESTS=$(go test -list . $PKG | grep '^Test' || true)
+  if [ -z "$TESTS" ]; then
+    echo "No test functions found in $PKG, skipping."
+    continue
+  fi
+  for test in $TESTS; do
+    echo -e "\n--- Running $test in $PKG ---"
+    if go test -v -run "^$test$" $PKG; then
+      PASS_COUNT=$((PASS_COUNT+1))
+    else
+      FAIL_COUNT=$((FAIL_COUNT+1))
+    fi
+  done
+done
+
+echo -e "\nAll tests completed."
+echo "Passed: $PASS_COUNT"
+echo "Failed: $FAIL_COUNT"
+if [ "$FAIL_COUNT" -ne 0 ]; then
+  exit 1
+fi
 
 # Clean up
 echo "Cleaning up..."

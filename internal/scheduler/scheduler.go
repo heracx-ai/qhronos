@@ -17,6 +17,8 @@ const (
 	scheduleKey = "schedules"
 	// Redis key for recurring events
 	recurringKey = "recurring:events"
+	// Redis key for dispatch queue
+	dispatchQueueKey = "dispatch:queue"
 )
 
 type Scheduler struct {
@@ -92,8 +94,8 @@ func (s *Scheduler) ScheduleRecurringEvent(ctx context.Context, event *models.Ev
 	return err
 }
 
-// GetDueSchedules retrieves schedules that are due for execution (idempotent version)
-func (s *Scheduler) GetDueSchedules(ctx context.Context) ([]*models.Schedule, error) {
+// GetDueSchedules moves due schedules to the dispatch queue (idempotent version)
+func (s *Scheduler) GetDueSchedules(ctx context.Context) (int, error) {
 	now := time.Now().Unix()
 
 	// Get all due schedule keys
@@ -102,34 +104,51 @@ func (s *Scheduler) GetDueSchedules(ctx context.Context) ([]*models.Schedule, er
 		Max: fmt.Sprintf("%d", now),
 	}).Result()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get due schedules from Redis: %w", err)
+		return 0, fmt.Errorf("failed to get due schedules from Redis: %w", err)
 	}
 
-	var schedules []*models.Schedule
+	count := 0
 	for _, key := range keys {
 		// Fetch schedule JSON from hash
 		data, err := s.redis.HGet(ctx, "schedule:data", key).Result()
 		if err == redis.Nil {
 			continue // No data, skip
 		} else if err != nil {
-			return nil, fmt.Errorf("failed to get schedule data from hash: %w", err)
+			return count, fmt.Errorf("failed to get schedule data from hash: %w", err)
 		}
-		var sched models.Schedule
-		if err := json.Unmarshal([]byte(data), &sched); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal schedule: %w", err)
+
+		// Push to dispatch queue
+		err = s.redis.RPush(ctx, dispatchQueueKey, data).Err()
+		if err != nil {
+			return count, fmt.Errorf("failed to push schedule to dispatch queue: %w", err)
 		}
-		schedules = append(schedules, &sched)
+		count++
 
 		// Remove from both sorted set and hash after processing
 		if err := s.redis.ZRem(ctx, scheduleKey, key).Err(); err != nil {
-			return nil, fmt.Errorf("failed to remove processed schedule from sorted set: %w", err)
+			return count, fmt.Errorf("failed to remove processed schedule from sorted set: %w", err)
 		}
 		if err := s.redis.HDel(ctx, "schedule:data", key).Err(); err != nil {
-			return nil, fmt.Errorf("failed to remove processed schedule from hash: %w", err)
+			return count, fmt.Errorf("failed to remove processed schedule from hash: %w", err)
 		}
 	}
 
-	return schedules, nil
+	return count, nil
+}
+
+// PopDispatchQueue pops a schedule from the dispatch queue (for worker use)
+func (s *Scheduler) PopDispatchQueue(ctx context.Context) (*models.Schedule, error) {
+	data, err := s.redis.LPop(ctx, dispatchQueueKey).Result()
+	if err == redis.Nil {
+		return nil, nil // No item
+	} else if err != nil {
+		return nil, fmt.Errorf("failed to pop from dispatch queue: %w", err)
+	}
+	var sched models.Schedule
+	if err := json.Unmarshal([]byte(data), &sched); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal schedule from dispatch queue: %w", err)
+	}
+	return &sched, nil
 }
 
 // RemoveScheduledEvent removes a scheduled event from Redis (idempotent version)

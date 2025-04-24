@@ -234,9 +234,28 @@ func main() {
 		}
 	}()
 
+	// Start dispatcher worker pool
 	go func() {
-		if err := dispatcher.Run(ctx, schedulerService); err != nil {
-			logger.Error("Dispatcher error", zap.Error(err))
+		err := dispatcher.Run(ctx, schedulerService, cfg.Scheduler.DispatchWorkerCount)
+		if err != nil && err != context.Canceled {
+			logger.Error("Dispatcher worker pool exited with error", zap.Error(err))
+		}
+	}()
+
+	// Periodically move due schedules to dispatch queue
+	go func() {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				_, err := schedulerService.GetDueSchedules(ctx)
+				if err != nil {
+					logger.Error("Failed to move due schedules to dispatch queue", zap.Error(err))
+				}
+			}
 		}
 	}()
 

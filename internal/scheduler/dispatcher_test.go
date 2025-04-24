@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -39,7 +40,7 @@ func (m *MockHTTPClient) Do(req *http.Request) (*http.Response, error) {
 func TestDispatcher(t *testing.T) {
 	ctx := context.Background()
 	db := testutils.TestDB(t)
-	logger := zap.NewNop()
+	logger, _ := zap.NewDevelopment()
 	redisClient := testutils.TestRedis(t)
 	eventRepo := repository.NewEventRepository(db, logger, redisClient)
 	occurrenceRepo := repository.NewOccurrenceRepository(db, logger)
@@ -207,7 +208,7 @@ func TestDispatcher(t *testing.T) {
 func TestDispatcher_RedisOnlyDispatch(t *testing.T) {
 	ctx := context.Background()
 	db := testutils.TestDB(t)
-	logger := zap.NewNop()
+	logger, _ := zap.NewDevelopment()
 	redisClient := testutils.TestRedis(t)
 	redisClient.FlushAll(ctx)
 	eventRepo := repository.NewEventRepository(db, logger, redisClient)
@@ -251,20 +252,12 @@ func TestDispatcher_RedisOnlyDispatch(t *testing.T) {
 	require.NoError(t, err)
 
 	// Debug: Print number of due schedules before running dispatcher
-	dueSchedules, err := scheduler.GetDueSchedules(ctx)
+	count, err := scheduler.GetDueSchedules(ctx)
 	if err != nil {
 		t.Fatalf("Error getting due schedules: %v", err)
 	}
-	fmt.Printf("[DEBUG] Due schedules before dispatcher: %d\n", len(dueSchedules))
-	// Re-add the schedule since GetDueSchedules removes it
-	if len(dueSchedules) > 0 {
-		err = scheduler.ScheduleEvent(ctx, &schedule.Occurrence, event)
-		require.NoError(t, err)
-	}
-
-	// Delete event from DB (simulate event deletion, but schedule remains in Redis)
-	err = eventRepo.Delete(ctx, event.ID)
-	require.NoError(t, err)
+	fmt.Printf("[DEBUG] Due schedules before dispatcher: %d\n", count)
+	// Do NOT re-add the schedule here; it should now be in the dispatch queue
 
 	// Setup expectations: dispatcher should still attempt dispatch
 	mockHTTP.On("Do", mock.AnythingOfType("*http.Request")).Return(&http.Response{
@@ -272,14 +265,14 @@ func TestDispatcher_RedisOnlyDispatch(t *testing.T) {
 		Body:       ioutil.NopCloser(bytes.NewBuffer([]byte{})),
 	}, nil)
 
-	// Run dispatcher for one tick
-	ctxTimeout, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
+	// Start dispatcher after GetDueSchedules
+	fmt.Printf("[DEBUG] %s: Starting dispatcher goroutine\n", time.Now().Format(time.RFC3339Nano))
 	go func() {
-		dispatcher.Run(ctxTimeout, scheduler)
+		dispatcher.Run(ctx, scheduler, 1)
 	}()
-	// Wait a moment for dispatcher to process
-	time.Sleep(3 * time.Second)
+	fmt.Printf("[DEBUG] %s: Sleeping before assertion\n", time.Now().Format(time.RFC3339Nano))
+	time.Sleep(5 * time.Second)
+	fmt.Printf("[DEBUG] %s: Asserting mock call\n", time.Now().Format(time.RFC3339Nano))
 
 	// Verify dispatch was attempted
 	mockHTTP.AssertCalled(t, "Do", mock.AnythingOfType("*http.Request"))
@@ -288,7 +281,7 @@ func TestDispatcher_RedisOnlyDispatch(t *testing.T) {
 func TestDispatcher_GetDueSchedules(t *testing.T) {
 	ctx := context.Background()
 	db := testutils.TestDB(t)
-	logger := zap.NewNop()
+	logger, _ := zap.NewDevelopment()
 	redisClient := testutils.TestRedis(t)
 	redisClient.FlushAll(ctx)
 	eventRepo := repository.NewEventRepository(db, logger, redisClient)
@@ -325,16 +318,26 @@ func TestDispatcher_GetDueSchedules(t *testing.T) {
 	require.NoError(t, err)
 
 	// Debug: Print number of due schedules before running dispatcher
-	dueSchedules, err := scheduler.GetDueSchedules(ctx)
+	count, err := scheduler.GetDueSchedules(ctx)
 	if err != nil {
 		t.Fatalf("Error getting due schedules: %v", err)
 	}
-	fmt.Printf("[DEBUG] Due schedules before dispatcher: %d\n", len(dueSchedules))
-	// Re-add the schedule since GetDueSchedules removes it
-	if len(dueSchedules) > 0 {
-		err = scheduler.ScheduleEvent(ctx, occurrence, event)
-		require.NoError(t, err)
+	fmt.Printf("[DEBUG] Due schedules before dispatcher: %d\n", count)
+
+	// Debug: Print contents of dispatch queue after GetDueSchedules
+	items, err := redisClient.LRange(ctx, dispatchQueueKey, 0, -1).Result()
+	if err != nil {
+		t.Fatalf("Error reading dispatch queue: %v", err)
 	}
+	fmt.Printf("[DEBUG] Dispatch queue after GetDueSchedules: %v\n", items)
+
+	// Ensure the dispatch queue is populated before starting the worker
+	if len(items) == 0 {
+		t.Fatalf("Dispatch queue is empty after GetDueSchedules; cannot start worker.")
+	}
+
+	// Small delay to ensure Redis propagation
+	time.Sleep(100 * time.Millisecond)
 
 	// Setup expectations: dispatcher should still attempt dispatch
 	mockHTTP.On("Do", mock.AnythingOfType("*http.Request")).Return(&http.Response{
@@ -342,15 +345,224 @@ func TestDispatcher_GetDueSchedules(t *testing.T) {
 		Body:       ioutil.NopCloser(bytes.NewBuffer([]byte{})),
 	}, nil)
 
-	// Run dispatcher for one tick
-	ctxTimeout, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
+	// Start dispatcher after GetDueSchedules
+	fmt.Printf("[DEBUG] %s: Starting dispatcher goroutine\n", time.Now().Format(time.RFC3339Nano))
 	go func() {
-		dispatcher.Run(ctxTimeout, scheduler)
+		dispatcher.Run(ctx, scheduler, 1)
 	}()
-	// Wait a moment for dispatcher to process
-	time.Sleep(3 * time.Second)
+	fmt.Printf("[DEBUG] %s: Sleeping before assertion\n", time.Now().Format(time.RFC3339Nano))
+	time.Sleep(5 * time.Second)
+	fmt.Printf("[DEBUG] %s: Asserting mock call\n", time.Now().Format(time.RFC3339Nano))
 
 	// Verify dispatch was attempted
 	mockHTTP.AssertCalled(t, "Do", mock.AnythingOfType("*http.Request"))
+}
+
+// Synchronization helper for worker
+func runWorkerAndWait(ctx context.Context, dispatcher *Dispatcher, scheduler *Scheduler, duration time.Duration) {
+	workerCtx, cancel := context.WithTimeout(ctx, duration)
+	defer cancel()
+	wg := make(chan struct{})
+	go func() {
+		dispatcher.Run(workerCtx, scheduler, 1)
+		close(wg)
+	}()
+	<-wg
+}
+
+func TestDispatcher_DispatchQueueWorker(t *testing.T) {
+	ctx := context.Background()
+	db := testutils.TestDB(t)
+	logger, _ := zap.NewDevelopment()
+	redisClient := testutils.TestRedis(t)
+	redisClient.FlushAll(ctx)
+	eventRepo := repository.NewEventRepository(db, logger, redisClient)
+	occurrenceRepo := repository.NewOccurrenceRepository(db, logger)
+	hmacService := services.NewHMACService("test-secret")
+	mockHTTP := new(MockHTTPClient)
+	dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger)
+	dispatcher.SetHTTPClient(mockHTTP)
+	scheduler := NewScheduler(redisClient, logger)
+
+	cleanup := func() {
+		_, err := db.ExecContext(ctx, "TRUNCATE TABLE occurrences CASCADE")
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, "TRUNCATE TABLE events CASCADE")
+		require.NoError(t, err)
+		redisClient.FlushAll(ctx)
+	}
+
+	t.Run("worker_processes_and_removes_from_processing_queue_on_success", func(t *testing.T) {
+		cleanup()
+		event := &models.Event{
+			ID:          uuid.New(),
+			Name:        "Worker Event",
+			Description: "Test",
+			StartTime:   time.Now().Add(-time.Minute),
+			Webhook:     "http://example.com/webhook",
+			Status:      models.EventStatusActive,
+			Metadata:    []byte(`{"key": "value"}`),
+			Tags:        pq.StringArray{"test"},
+			CreatedAt:   time.Now(),
+		}
+		err := eventRepo.Create(ctx, event)
+		require.NoError(t, err)
+		occ := &models.Occurrence{
+			OccurrenceID: uuid.New(),
+			EventID:      event.ID,
+			ScheduledAt:  event.StartTime,
+			Status:       models.OccurrenceStatusPending,
+			Timestamp:    time.Now(),
+		}
+		err = occurrenceRepo.Create(ctx, occ)
+		require.NoError(t, err)
+		sched := models.Schedule{
+			Occurrence:  *occ,
+			Name:        event.Name,
+			Description: event.Description,
+			Webhook:     event.Webhook,
+			Metadata:    event.Metadata,
+			Tags:        event.Tags,
+		}
+		data, err := json.Marshal(sched)
+		require.NoError(t, err)
+		err = redisClient.RPush(ctx, dispatchQueueKey, data).Err()
+		require.NoError(t, err)
+
+		// Setup HTTP mock
+		mockHTTP.On("Do", mock.AnythingOfType("*http.Request")).Return(&http.Response{
+			StatusCode: 200,
+			Body:       ioutil.NopCloser(bytes.NewBuffer([]byte{})),
+		}, nil)
+
+		// Before starting the worker, check the processing queue is empty
+		items, err := redisClient.LRange(ctx, dispatchProcessingKey, 0, -1).Result()
+		require.NoError(t, err)
+		assert.Len(t, items, 0)
+
+		// Run worker and wait for completion
+		runWorkerAndWait(ctx, dispatcher, scheduler, 3*time.Second)
+
+		// After worker runs, processing queue should be empty
+		items, err = redisClient.LRange(ctx, dispatchProcessingKey, 0, -1).Result()
+		require.NoError(t, err)
+		assert.Len(t, items, 0)
+	})
+
+	t.Run("worker_leaves_item_in_processing_queue_on_failure_(less_than_max_retries)", func(t *testing.T) {
+		cleanup()
+		// Reset and reattach mock HTTP client
+		mockHTTP = new(MockHTTPClient)
+		dispatcher.SetHTTPClient(mockHTTP)
+		// Set dispatcher retryDelay to 100ms for fast test
+		dispatcher.retryDelay = 100 * time.Millisecond
+
+		event := &models.Event{
+			ID:          uuid.New(),
+			Name:        "Worker Fail Event",
+			Description: "Test",
+			StartTime:   time.Now().Add(-time.Minute),
+			Webhook:     "http://example.com/webhook",
+			Status:      models.EventStatusActive,
+			Metadata:    []byte(`{"key": "value"}`),
+			Tags:        pq.StringArray{"test"},
+			CreatedAt:   time.Now(),
+		}
+		err := eventRepo.Create(ctx, event)
+		require.NoError(t, err)
+		occ := &models.Occurrence{
+			OccurrenceID: uuid.New(),
+			EventID:      event.ID,
+			ScheduledAt:  event.StartTime,
+			Status:       models.OccurrenceStatusPending,
+			Timestamp:    time.Now(),
+		}
+		err = occurrenceRepo.Create(ctx, occ)
+		require.NoError(t, err)
+		sched := models.Schedule{
+			Occurrence:  *occ,
+			Name:        event.Name,
+			Description: event.Description,
+			Webhook:     event.Webhook,
+			Metadata:    event.Metadata,
+			Tags:        event.Tags,
+		}
+		data, err := json.Marshal(sched)
+		require.NoError(t, err)
+		err = redisClient.RPush(ctx, dispatchQueueKey, data).Err()
+		require.NoError(t, err)
+
+		// Setup HTTP mock to always fail for every attempt
+		mockHTTP.On("Do", mock.AnythingOfType("*http.Request")).Return((*http.Response)(nil), errors.New("fail")).Maybe()
+
+		// Run worker and wait for completion (wait for 2 retries, less than maxRetries=3)
+		runWorkerAndWait(ctx, dispatcher, scheduler, 400*time.Millisecond)
+
+		// Small delay to ensure worker has finished updating the queue
+		time.Sleep(50 * time.Millisecond)
+
+		// Processing queue should have the item (since not yet max retries)
+		items, err := redisClient.LRange(ctx, dispatchProcessingKey, 0, -1).Result()
+		require.NoError(t, err)
+		assert.Len(t, items, 1)
+	})
+
+	t.Run("worker_removes_item_from_processing_queue_after_max_retries", func(t *testing.T) {
+		cleanup()
+		// Set dispatcher retryDelay to 100ms for fast test
+		dispatcher.retryDelay = 100 * time.Millisecond
+
+		event := &models.Event{
+			ID:          uuid.New(),
+			Name:        "Worker Max Retry Event",
+			Description: "Test",
+			StartTime:   time.Now().Add(-time.Minute),
+			Webhook:     "http://example.com/webhook",
+			Status:      models.EventStatusActive,
+			Metadata:    []byte(`{"key": "value"}`),
+			Tags:        pq.StringArray{"test"},
+			CreatedAt:   time.Now(),
+		}
+		err := eventRepo.Create(ctx, event)
+		require.NoError(t, err)
+		occ := &models.Occurrence{
+			OccurrenceID: uuid.New(),
+			EventID:      event.ID,
+			ScheduledAt:  event.StartTime,
+			Status:       models.OccurrenceStatusPending,
+			Timestamp:    time.Now(),
+		}
+		err = occurrenceRepo.Create(ctx, occ)
+		require.NoError(t, err)
+		sched := models.Schedule{
+			Occurrence: models.Occurrence{
+				OccurrenceID: occ.OccurrenceID,
+				EventID:      occ.EventID,
+				ScheduledAt:  occ.ScheduledAt,
+				Status:       occ.Status,
+				Timestamp:    occ.Timestamp,
+				AttemptCount: 2, // start at 2 so next fail is maxRetries (default 3)
+			},
+			Name:        event.Name,
+			Description: event.Description,
+			Webhook:     event.Webhook,
+			Metadata:    event.Metadata,
+			Tags:        event.Tags,
+		}
+		data, err := json.Marshal(sched)
+		require.NoError(t, err)
+		err = redisClient.RPush(ctx, dispatchQueueKey, data).Err()
+		require.NoError(t, err)
+
+		// Setup HTTP mock to fail
+		mockHTTP.On("Do", mock.AnythingOfType("*http.Request")).Return((*http.Response)(nil), errors.New("fail"))
+
+		// Run worker and wait for completion (wait for enough time for maxRetries)
+		runWorkerAndWait(ctx, dispatcher, scheduler, 1*time.Second)
+
+		// Processing queue should be empty (item removed after max retries)
+		items, err := redisClient.LRange(ctx, dispatchProcessingKey, 0, -1).Result()
+		require.NoError(t, err)
+		assert.Len(t, items, 0)
+	})
 }

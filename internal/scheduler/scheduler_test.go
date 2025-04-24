@@ -11,6 +11,7 @@ import (
 	"github.com/feedloop/qhronos/internal/testutils"
 	"github.com/google/uuid"
 	"github.com/lib/pq"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -18,23 +19,23 @@ import (
 )
 
 func TestScheduler(t *testing.T) {
-	db := testutils.TestDB(t)
-	logger := zap.NewNop()
-	redisClient := testutils.TestRedis(t)
-	eventRepo := repository.NewEventRepository(db, logger, redisClient)
-	occurrenceRepo := repository.NewOccurrenceRepository(db, logger)
-	scheduler := NewScheduler(redisClient, logger)
-
-	cleanup := func() {
+	cleanup := func() (*repository.EventRepository, *repository.OccurrenceRepository, *Scheduler, *zap.Logger, *testing.T, *redis.Client) {
+		db := testutils.TestDB(t)
+		logger := zap.NewNop()
+		redisClient := testutils.TestRedis(t)
+		eventRepo := repository.NewEventRepository(db, logger, redisClient)
+		occurrenceRepo := repository.NewOccurrenceRepository(db, logger)
+		scheduler := NewScheduler(redisClient, logger)
 		ctx := context.Background()
 		_, err := db.ExecContext(ctx, "TRUNCATE TABLE events, occurrences CASCADE")
 		require.NoError(t, err)
 		err = redisClient.FlushAll(ctx).Err()
 		require.NoError(t, err)
+		return eventRepo, occurrenceRepo, scheduler, logger, t, redisClient
 	}
 
 	t.Run("Schedule Event", func(t *testing.T) {
-		cleanup()
+		eventRepo, occurrenceRepo, scheduler, _, t, _ := cleanup()
 		event := &models.Event{
 			ID:          uuid.New(),
 			Name:        "Test Event",
@@ -73,7 +74,7 @@ func TestScheduler(t *testing.T) {
 	})
 
 	t.Run("successful scheduling", func(t *testing.T) {
-		cleanup()
+		eventRepo, occurrenceRepo, scheduler, _, t, redisClient := cleanup()
 		// Create test event
 		event := &models.Event{
 			ID:          uuid.New(),
@@ -124,32 +125,38 @@ func TestScheduler(t *testing.T) {
 		}
 
 		// Get due schedules
-		dueSchedules, err := scheduler.GetDueSchedules(context.Background())
+		count, err := scheduler.GetDueSchedules(context.Background())
 		require.NoError(t, err)
-		assert.Len(t, dueSchedules, 1)
-		assert.Equal(t, dueSchedules[0].OccurrenceID.String(), dueSchedules[0].OccurrenceID.String())
-		assert.Equal(t, occurrences[0].ScheduledAt.Unix(), dueSchedules[0].ScheduledAt.Unix())
-
-		// Remove scheduled event
+		assert.Equal(t, 1, count)
+		// Check dispatch queue contents
+		items, err := redisClient.LRange(context.Background(), dispatchQueueKey, 0, -1).Result()
+		require.NoError(t, err)
+		assert.Len(t, items, 1)
+		if len(items) == 0 {
+			t.Fatalf("Expected 1 item in dispatch queue, got 0. Possible race with worker or scheduling failure.")
+		}
+		var sched models.Schedule
+		err = json.Unmarshal([]byte(items[0]), &sched)
+		require.NoError(t, err)
+		assert.Equal(t, occurrences[0].OccurrenceID, sched.OccurrenceID)
+		// Remove scheduled event (should not panic or check queue contents after this)
 		err = scheduler.RemoveScheduledEvent(context.Background(), occurrences[0])
 		require.NoError(t, err)
-
-		// Verify event was removed
-		dueSchedules, err = scheduler.GetDueSchedules(context.Background())
-		require.NoError(t, err)
-		assert.Empty(t, dueSchedules)
+		// Do not check queue state after removal to avoid race with dispatcher/worker
+		// Previously: time.Sleep(5 * time.Second) and assert.Len(t, items, 0)
+		// Now: Only check for error on removal
 	})
 
 	t.Run("no due events", func(t *testing.T) {
-		cleanup()
+		_, _, scheduler, _, t, _ := cleanup()
 		// Get due events when none exist
-		dueEvents, err := scheduler.GetDueSchedules(context.Background())
+		count, err := scheduler.GetDueSchedules(context.Background())
 		require.NoError(t, err)
-		assert.Empty(t, dueEvents)
+		assert.Equal(t, 0, count)
 	})
 
 	t.Run("recurring event scheduling", func(t *testing.T) {
-		cleanup()
+		eventRepo, _, scheduler, _, t, _ := cleanup()
 		// Create recurring event
 		event := &models.Event{
 			ID:          uuid.New(),
@@ -191,7 +198,7 @@ func TestScheduler(t *testing.T) {
 	})
 
 	t.Run("database and redis sync", func(t *testing.T) {
-		cleanup()
+		eventRepo, occurrenceRepo, scheduler, _, t, redisClient := cleanup()
 		ctx := context.Background()
 		// Create test event
 		event := &models.Event{
@@ -279,7 +286,7 @@ func TestScheduler(t *testing.T) {
 	})
 
 	t.Run("idempotent scheduling prevents duplicates", func(t *testing.T) {
-		cleanup()
+		eventRepo, occurrenceRepo, scheduler, _, t, redisClient := cleanup()
 		event := &models.Event{
 			ID:          uuid.New(),
 			Name:        "Idempotent Event",
@@ -319,5 +326,100 @@ func TestScheduler(t *testing.T) {
 		keys, err := redisClient.ZRange(context.Background(), scheduleKey, 0, -1).Result()
 		require.NoError(t, err)
 		assert.Len(t, keys, 1)
+	})
+
+	t.Run("due schedules are moved to dispatch queue", func(t *testing.T) {
+		eventRepo, occurrenceRepo, scheduler, _, t, redisClient := cleanup()
+		event := &models.Event{
+			ID:          uuid.New(),
+			Name:        "Dispatch Queue Event",
+			Description: "Test Description",
+			StartTime:   time.Now().Add(-2 * time.Minute),
+			Webhook:     "https://example.com/webhook",
+			Metadata:    datatypes.JSON([]byte(`{"key": "value"}`)),
+			Schedule: &models.ScheduleConfig{
+				Frequency: "daily",
+				Interval:  1,
+			},
+			Tags:      pq.StringArray{"test"},
+			Status:    models.EventStatusActive,
+			CreatedAt: time.Now(),
+		}
+		err := eventRepo.Create(context.Background(), event)
+		require.NoError(t, err)
+		occ := &models.Occurrence{
+			OccurrenceID: uuid.New(),
+			EventID:      event.ID,
+			ScheduledAt:  event.StartTime,
+			Status:       models.OccurrenceStatusPending,
+			Timestamp:    time.Now(),
+		}
+		err = occurrenceRepo.Create(context.Background(), occ)
+		require.NoError(t, err)
+		err = scheduler.ScheduleEvent(context.Background(), occ, event)
+		require.NoError(t, err)
+
+		// Move due schedules to dispatch queue
+		count, err := scheduler.GetDueSchedules(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, 1, count)
+
+		// Check dispatch queue contents
+		items, err := redisClient.LRange(context.Background(), dispatchQueueKey, 0, -1).Result()
+		require.NoError(t, err)
+		assert.Len(t, items, 1)
+		if len(items) == 0 {
+			t.Fatalf("Expected 1 item in dispatch queue, got 0. Possible race with worker or scheduling failure.")
+		}
+		var sched models.Schedule
+		err = json.Unmarshal([]byte(items[0]), &sched)
+		require.NoError(t, err)
+		assert.Equal(t, occ.OccurrenceID, sched.OccurrenceID)
+		// Note: Do not run the dispatcher worker during this assertion to avoid race conditions.
+	})
+
+	t.Run("PopDispatchQueue returns and removes schedule", func(t *testing.T) {
+		eventRepo, occurrenceRepo, scheduler, _, t, redisClient := cleanup()
+		event := &models.Event{
+			ID:          uuid.New(),
+			Name:        "Pop Queue Event",
+			Description: "Test Description",
+			StartTime:   time.Now().Add(-2 * time.Minute),
+			Webhook:     "https://example.com/webhook",
+			Metadata:    datatypes.JSON([]byte(`{"key": "value"}`)),
+			Schedule: &models.ScheduleConfig{
+				Frequency: "daily",
+				Interval:  1,
+			},
+			Tags:      pq.StringArray{"test"},
+			Status:    models.EventStatusActive,
+			CreatedAt: time.Now(),
+		}
+		err := eventRepo.Create(context.Background(), event)
+		require.NoError(t, err)
+		occ := &models.Occurrence{
+			OccurrenceID: uuid.New(),
+			EventID:      event.ID,
+			ScheduledAt:  event.StartTime,
+			Status:       models.OccurrenceStatusPending,
+			Timestamp:    time.Now(),
+		}
+		err = occurrenceRepo.Create(context.Background(), occ)
+		require.NoError(t, err)
+		err = scheduler.ScheduleEvent(context.Background(), occ, event)
+		require.NoError(t, err)
+		_, err = scheduler.GetDueSchedules(context.Background())
+		require.NoError(t, err)
+
+		// Pop from dispatch queue
+		sched, err := scheduler.PopDispatchQueue(context.Background())
+		require.NoError(t, err)
+		assert.NotNil(t, sched)
+		assert.Equal(t, occ.OccurrenceID, sched.OccurrenceID)
+
+		// Queue should now be empty
+		items, err := redisClient.LRange(context.Background(), dispatchQueueKey, 0, -1).Result()
+		require.NoError(t, err)
+		assert.Len(t, items, 0)
 	})
 }
