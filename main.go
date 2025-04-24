@@ -20,6 +20,7 @@ import (
 	"github.com/feedloop/qhronos/internal/repository"
 	"github.com/feedloop/qhronos/internal/scheduler"
 	"github.com/feedloop/qhronos/internal/services"
+	ginzap "github.com/gin-contrib/zap"
 	"github.com/gin-gonic/gin"
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/postgres"
@@ -34,6 +35,22 @@ import (
 //
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
+
+// zapInfoWriter implements io.Writer to redirect GIN debug logs to Zap at Info level
+type zapInfoWriter struct{ logger *zap.Logger }
+
+func (w zapInfoWriter) Write(p []byte) (n int, err error) {
+	w.logger.Info("[GIN-debug]", zap.String("msg", string(p)))
+	return len(p), nil
+}
+
+// zapErrorWriter implements io.Writer to redirect GIN error logs to Zap at Error level
+type zapErrorWriter struct{ logger *zap.Logger }
+
+func (w zapErrorWriter) Write(p []byte) (n int, err error) {
+	w.logger.Error("[GIN-error]", zap.String("msg", string(p)))
+	return len(p), nil
+}
 
 func runMigrations(cfg *config.Config) error {
 	dsn := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
@@ -126,7 +143,16 @@ func main() {
 	}
 	defer logger.Sync()
 
-	logger.Info("Configuration loaded", zap.Any("config", cfg))
+	// Set GIN mode to release if log level is not debug
+	if cfg.Logging.Level != "debug" {
+		gin.SetMode(gin.ReleaseMode)
+	}
+
+	// Redirect GIN's internal debug and error logs to Zap
+	gin.DefaultWriter = zapInfoWriter{logger}
+	gin.DefaultErrorWriter = zapErrorWriter{logger}
+
+	logger.Info("Configuration loaded", zap.Int("port", cfg.Server.Port))
 
 	// After loading cfg and before calling StartArchivalScheduler
 	durations, err := cfg.ParseRetentionDurations()
@@ -178,7 +204,11 @@ func main() {
 	rateLimiter := middleware.NewRateLimiter(redisClient)
 
 	// Initialize router
-	router := gin.Default()
+	router := gin.New()
+
+	// Add zap HTTP logging middleware
+	router.Use(ginzap.Ginzap(logger, time.RFC3339, true))
+	router.Use(ginzap.RecoveryWithZap(logger, true))
 
 	// Register request ID middleware
 	router.Use(middleware.RequestIDMiddleware(logger))
