@@ -38,8 +38,9 @@ func TestEventExpander(t *testing.T) {
 	// Test configuration
 	lookAheadDuration := 24 * time.Hour
 	expansionInterval := 5 * time.Minute
+	gracePeriod := 2 * time.Minute
 
-	expander := NewExpander(scheduler, eventRepo, occurrenceRepo, lookAheadDuration, expansionInterval, logger)
+	expander := NewExpander(scheduler, eventRepo, occurrenceRepo, lookAheadDuration, expansionInterval, gracePeriod, logger)
 
 	t.Run("successful event expansion", func(t *testing.T) {
 		cleanup()

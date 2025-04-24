@@ -187,6 +187,7 @@ func main() {
 		occurrenceRepo,
 		cfg.Scheduler.LookAheadDuration,
 		cfg.Scheduler.ExpansionInterval,
+		cfg.Scheduler.GracePeriod,
 		logger,
 	)
 
@@ -196,7 +197,7 @@ func main() {
 	dispatcher := scheduler.NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger)
 
 	// Initialize handlers
-	eventHandler := handlers.NewEventHandler(eventRepo)
+	eventHandler := handlers.NewEventHandler(eventRepo, expander)
 	occurrenceHandler := handlers.NewOccurrenceHandler(eventRepo, occurrenceRepo)
 	tokenHandler := handlers.NewTokenHandler(tokenService)
 

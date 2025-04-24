@@ -3,7 +3,7 @@ server:
 
 database:
   host: localhost
-  port: 5432
+  port: 5433
   user: postgres
   password: postgres
   dbname: qhronos
@@ -21,7 +21,8 @@ auth:
 scheduler:
   look_ahead_duration: 24h   # How far into the future to expand recurring events
   expansion_interval: 5m     # How often to run the expander
-  dispatch_worker_count: 4   # Number of dispatch workers
+  dispatch_worker_count: 1   # Number of dispatcher workers
+  grace_period: 2m           # How far into the past to look for missed events
 
 archival:
   check_period: 1h 

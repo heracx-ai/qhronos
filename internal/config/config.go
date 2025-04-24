@@ -66,6 +66,7 @@ type SchedulerConfig struct {
 	LookAheadDuration   time.Duration `mapstructure:"look_ahead_duration"`
 	ExpansionInterval   time.Duration `mapstructure:"expansion_interval"`
 	DispatchWorkerCount int           `mapstructure:"dispatch_worker_count"`
+	GracePeriod         time.Duration `mapstructure:"grace_period"`
 }
 
 type RetentionConfig struct {

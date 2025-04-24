@@ -17,6 +17,7 @@ type Expander struct {
 	occurrenceRepo    *repository.OccurrenceRepository
 	lookAheadDuration time.Duration
 	expansionInterval time.Duration
+	gracePeriod       time.Duration
 	logger            *zap.Logger
 }
 
@@ -27,6 +28,7 @@ func NewExpander(
 	occurrenceRepo *repository.OccurrenceRepository,
 	lookAheadDuration time.Duration,
 	expansionInterval time.Duration,
+	gracePeriod time.Duration,
 	logger *zap.Logger,
 ) *Expander {
 	logger.Debug("Initializing Expander", zap.Duration("lookAheadDuration", lookAheadDuration), zap.Duration("expansionInterval", expansionInterval))
@@ -36,6 +38,7 @@ func NewExpander(
 		occurrenceRepo:    occurrenceRepo,
 		lookAheadDuration: lookAheadDuration,
 		expansionInterval: expansionInterval,
+		gracePeriod:       gracePeriod,
 		logger:            logger,
 	}
 }
@@ -116,6 +119,7 @@ func (e *Expander) expandRecurringEvent(ctx context.Context, event *models.Event
 
 	// Get next occurrences based on schedule configuration
 	now := time.Now().UTC()
+	graceStart := now.Add(-e.gracePeriod)
 	endTime := now.Add(e.lookAheadDuration)
 	startTime := event.StartTime.UTC()
 
@@ -126,14 +130,14 @@ func (e *Expander) expandRecurringEvent(ctx context.Context, event *models.Event
 	switch schedule.Frequency {
 	case "daily":
 		for t := startTime; t.Before(endTime); t = t.AddDate(0, 0, schedule.Interval) {
-			if t.After(now) {
+			if t.After(graceStart) {
 				occurrences = append(occurrences, t)
 			}
 		}
 	case "weekly":
 		if len(schedule.ByDay) == 0 {
 			for t := startTime; t.Before(endTime); t = t.AddDate(0, 0, 7*schedule.Interval) {
-				if t.After(now) {
+				if t.After(graceStart) {
 					occurrences = append(occurrences, t)
 				}
 			}
@@ -152,7 +156,7 @@ func (e *Expander) expandRecurringEvent(ctx context.Context, event *models.Event
 					weekday := weekdayMap[day]
 					daysToAdd := (int(weekday) - int(t.Weekday()) + 7) % 7
 					nextDay := t.AddDate(0, 0, daysToAdd)
-					if nextDay.After(now) && nextDay.Before(endTime) {
+					if nextDay.After(graceStart) && nextDay.Before(endTime) {
 						occurrences = append(occurrences, nextDay)
 					}
 				}
@@ -161,7 +165,7 @@ func (e *Expander) expandRecurringEvent(ctx context.Context, event *models.Event
 	case "monthly":
 		if len(schedule.ByMonthDay) == 0 {
 			for t := startTime; t.Before(endTime); t = t.AddDate(0, schedule.Interval, 0) {
-				if t.After(now) {
+				if t.After(graceStart) {
 					occurrences = append(occurrences, t)
 				}
 			}
@@ -169,7 +173,7 @@ func (e *Expander) expandRecurringEvent(ctx context.Context, event *models.Event
 			for t := startTime; t.Before(endTime); t = t.AddDate(0, schedule.Interval, 0) {
 				for _, day := range schedule.ByMonthDay {
 					nextDay := time.Date(t.Year(), t.Month(), day, t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), t.Location())
-					if nextDay.After(now) && nextDay.Before(endTime) {
+					if nextDay.After(graceStart) && nextDay.Before(endTime) {
 						occurrences = append(occurrences, nextDay)
 					}
 				}
@@ -178,7 +182,7 @@ func (e *Expander) expandRecurringEvent(ctx context.Context, event *models.Event
 	case "yearly":
 		if len(schedule.ByMonth) == 0 {
 			for t := startTime; t.Before(endTime); t = t.AddDate(schedule.Interval, 0, 0) {
-				if t.After(now) {
+				if t.After(graceStart) {
 					occurrences = append(occurrences, t)
 				}
 			}
@@ -186,7 +190,7 @@ func (e *Expander) expandRecurringEvent(ctx context.Context, event *models.Event
 			for t := startTime; t.Before(endTime); t = t.AddDate(schedule.Interval, 0, 0) {
 				for _, month := range schedule.ByMonth {
 					nextMonth := time.Date(t.Year(), time.Month(month), t.Day(), t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), t.Location())
-					if nextMonth.After(now) && nextMonth.Before(endTime) {
+					if nextMonth.After(graceStart) && nextMonth.Before(endTime) {
 						occurrences = append(occurrences, nextMonth)
 					}
 				}
@@ -239,11 +243,16 @@ func (e *Expander) expandNonRecurringEvent(ctx context.Context, event *models.Ev
 	}
 
 	now := time.Now().UTC()
+	graceStart := now.Add(-e.gracePeriod)
 	startTime := event.StartTime.UTC()
 
 	endTime := now.Add(e.lookAheadDuration)
 	if startTime.After(endTime) {
 		e.logger.Info("Event is beyond look-ahead window, skipping", zap.String("event_id", event.ID.String()))
+		return nil
+	}
+	if startTime.Before(graceStart) {
+		e.logger.Info("Event is before grace period, skipping", zap.String("event_id", event.ID.String()))
 		return nil
 	}
 
@@ -276,4 +285,20 @@ func (e *Expander) Run(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+func (e *Expander) ExpandRecurringEvent(ctx context.Context, event *models.Event) error {
+	return e.expandRecurringEvent(ctx, event)
+}
+
+func (e *Expander) ExpandNonRecurringEvent(ctx context.Context, event *models.Event) error {
+	return e.expandNonRecurringEvent(ctx, event)
+}
+
+func (e *Expander) GracePeriod() time.Duration {
+	return e.gracePeriod
+}
+
+func (e *Expander) LookAheadDuration() time.Duration {
+	return e.lookAheadDuration
 }

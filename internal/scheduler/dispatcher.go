@@ -183,6 +183,13 @@ func (d *Dispatcher) DispatchWebhook(ctx context.Context, sched *models.Schedule
 	}
 	_ = d.occurrenceRepo.Create(ctx, logOccurrence) // Ignore error to avoid blocking delivery
 
+	// Auto-inactivate one-time events after dispatch (success or max retries)
+	event, err := d.eventRepo.GetByID(ctx, sched.EventID)
+	if err == nil && event != nil && event.Schedule == nil && event.Status == "active" {
+		event.Status = "inactive"
+		_ = d.eventRepo.Update(ctx, event)
+	}
+
 	return err
 }
 

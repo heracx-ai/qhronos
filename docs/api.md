@@ -14,18 +14,34 @@ Authorization: Bearer <token>
 
 ### Create Event
 - **POST** `/events`
-- **Body:**
+- **Body (One-Time Event):**
 ```json
 {
   "name": "My Event",
   "description": "Description...",
   "start_time": "2024-04-23T10:00:00Z",
-  "webhook_url": "https://example.com/webhook",
+  "webhook": "https://example.com/webhook",
   "metadata": {"key": "value"},
-  "schedule": {"frequency": "daily", "interval": 1},
   "tags": ["tag1", "tag2"]
 }
 ```
+- **Body (Recurring Event):**
+```json
+{
+  "name": "My Recurring Event",
+  "description": "Description...",
+  "start_time": "2024-04-23T10:00:00Z",
+  "webhook": "https://example.com/webhook",
+  "schedule": {"frequency": "daily", "interval": 1},
+  "metadata": {"key": "value"},
+  "tags": ["tag1", "tag2"]
+}
+```
+- **Note:**
+  - For one-time events, omit the `schedule` field and provide `start_time`.
+  - For recurring events, provide both `start_time` and a `schedule` object.
+  - The `webhook` field is required (not `webhook_url`).
+  - The `Authorization` header is required for all requests.
 - **Response:** `201 Created`
 
 ### Get Event

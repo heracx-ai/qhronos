@@ -125,6 +125,12 @@ curl -X POST http://localhost:8080/events \
   }'
 ```
 
+> **Note:**
+> - For one-time events, omit the `schedule` field and provide `start_time`.
+> - For recurring events, provide both `start_time` and a `schedule` object.
+> - The `webhook` field is required (not `webhook_url`).
+> - The `Authorization` header is required for all requests.
+
 ## Schedule Parameter Tutorial
 
 The `schedule` parameter in event creation allows you to define recurring or one-time schedules using a flexible JSON structure. Here are the most common use cases:

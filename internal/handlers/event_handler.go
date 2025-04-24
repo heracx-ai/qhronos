@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"time"
@@ -8,6 +9,7 @@ import (
 	"github.com/feedloop/qhronos/internal/middleware"
 	"github.com/feedloop/qhronos/internal/models"
 	"github.com/feedloop/qhronos/internal/repository"
+	"github.com/feedloop/qhronos/internal/scheduler"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/lib/pq"
@@ -16,11 +18,12 @@ import (
 )
 
 type EventHandler struct {
-	repo *repository.EventRepository
+	repo     *repository.EventRepository
+	expander *scheduler.Expander
 }
 
-func NewEventHandler(repo *repository.EventRepository) *EventHandler {
-	return &EventHandler{repo: repo}
+func NewEventHandler(repo *repository.EventRepository, expander *scheduler.Expander) *EventHandler {
+	return &EventHandler{repo: repo, expander: expander}
 }
 
 func (h *EventHandler) CreateEvent(c *gin.Context) {
@@ -77,6 +80,21 @@ func (h *EventHandler) CreateEvent(c *gin.Context) {
 		return
 	}
 	logger.Info("Event created", zap.String("event_id", event.ID.String()))
+
+	// Immediate expansion if within window
+	now := time.Now().UTC()
+	graceStart := now.Add(-h.expander.GracePeriod())
+	lookAheadEnd := now.Add(h.expander.LookAheadDuration())
+	if event.StartTime.After(graceStart) && event.StartTime.Before(lookAheadEnd) {
+		go func() {
+			if event.Schedule == nil {
+				_ = h.expander.ExpandNonRecurringEvent(context.Background(), event)
+			} else {
+				_ = h.expander.ExpandRecurringEvent(context.Background(), event)
+			}
+		}()
+	}
+
 	c.JSON(http.StatusCreated, event)
 }
 
@@ -182,17 +200,21 @@ func (h *EventHandler) DeleteEvent(c *gin.Context) {
 func (h *EventHandler) ListEventsByTags(c *gin.Context) {
 	tagsParam := c.Query("tags")
 	if tagsParam == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "tags parameter is required"})
+		// No tags param: return all events
+		events, err := h.repo.List(c)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, events)
 		return
 	}
-
 	tags := strings.Split(tagsParam, ",")
 	events, err := h.repo.ListByTags(c, tags)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-
 	c.JSON(http.StatusOK, events)
 }
 
