@@ -20,6 +20,7 @@ import (
 func TestArchivalScheduler(t *testing.T) {
 	db := testutils.TestDB(t)
 	logger := zap.NewNop()
+	redisClient := testutils.TestRedis(t)
 	ctx := context.Background()
 
 	// Clean up tables before test
@@ -39,7 +40,7 @@ func TestArchivalScheduler(t *testing.T) {
 		Status:      models.EventStatusActive,
 		CreatedAt:   time.Now().Add(-48 * time.Hour),
 	}
-	eventRepo := repository.NewEventRepository(db, logger)
+	eventRepo := repository.NewEventRepository(db, logger, redisClient)
 	err = eventRepo.Create(ctx, oldEvent)
 	require.NoError(t, err)
 

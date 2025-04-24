@@ -24,7 +24,8 @@ import (
 func TestOccurrenceHandler(t *testing.T) {
 	db := testutils.TestDB(t)
 	logger := zap.NewNop()
-	eventRepo := repository.NewEventRepository(db, logger)
+	redisClient := testutils.TestRedis(t)
+	eventRepo := repository.NewEventRepository(db, logger, redisClient)
 	occurrenceRepo := repository.NewOccurrenceRepository(db, logger)
 	handler := NewOccurrenceHandler(eventRepo, occurrenceRepo)
 

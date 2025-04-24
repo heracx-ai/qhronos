@@ -20,9 +20,9 @@ import (
 func TestScheduler(t *testing.T) {
 	db := testutils.TestDB(t)
 	logger := zap.NewNop()
-	eventRepo := repository.NewEventRepository(db, logger)
-	occurrenceRepo := repository.NewOccurrenceRepository(db, logger)
 	redisClient := testutils.TestRedis(t)
+	eventRepo := repository.NewEventRepository(db, logger, redisClient)
+	occurrenceRepo := repository.NewOccurrenceRepository(db, logger)
 	scheduler := NewScheduler(redisClient, logger)
 
 	cleanup := func() {
@@ -63,7 +63,7 @@ func TestScheduler(t *testing.T) {
 		}
 		err = occurrenceRepo.Create(context.Background(), occ)
 		require.NoError(t, err)
-		err = scheduler.ScheduleEvent(context.Background(), occ)
+		err = scheduler.ScheduleEvent(context.Background(), occ, event)
 		require.NoError(t, err)
 
 		// Verify occurrences are created
@@ -119,31 +119,31 @@ func TestScheduler(t *testing.T) {
 			require.NoError(t, err)
 
 			// Schedule in Redis
-			err = scheduler.ScheduleEvent(context.Background(), occ)
+			err = scheduler.ScheduleEvent(context.Background(), occ, event)
 			require.NoError(t, err)
 		}
 
-		// Get due occurrences
-		dueOccurrences, err := scheduler.GetDueOccurrence(context.Background())
+		// Get due schedules
+		dueSchedules, err := scheduler.GetDueSchedules(context.Background())
 		require.NoError(t, err)
-		assert.Len(t, dueOccurrences, 1)
-		assert.Equal(t, dueOccurrences[0].OccurrenceID.String(), dueOccurrences[0].OccurrenceID.String())
-		assert.Equal(t, occurrences[0].ScheduledAt.Unix(), dueOccurrences[0].ScheduledAt.Unix())
+		assert.Len(t, dueSchedules, 1)
+		assert.Equal(t, dueSchedules[0].OccurrenceID.String(), dueSchedules[0].OccurrenceID.String())
+		assert.Equal(t, occurrences[0].ScheduledAt.Unix(), dueSchedules[0].ScheduledAt.Unix())
 
 		// Remove scheduled event
 		err = scheduler.RemoveScheduledEvent(context.Background(), occurrences[0])
 		require.NoError(t, err)
 
 		// Verify event was removed
-		dueOccurrences, err = scheduler.GetDueOccurrence(context.Background())
+		dueSchedules, err = scheduler.GetDueSchedules(context.Background())
 		require.NoError(t, err)
-		assert.Empty(t, dueOccurrences)
+		assert.Empty(t, dueSchedules)
 	})
 
 	t.Run("no due events", func(t *testing.T) {
 		cleanup()
 		// Get due events when none exist
-		dueEvents, err := scheduler.GetDueOccurrence(context.Background())
+		dueEvents, err := scheduler.GetDueSchedules(context.Background())
 		require.NoError(t, err)
 		assert.Empty(t, dueEvents)
 	})
@@ -235,7 +235,7 @@ func TestScheduler(t *testing.T) {
 		for _, occ := range occurrences {
 			err = occurrenceRepo.Create(ctx, occ)
 			require.NoError(t, err)
-			err = scheduler.ScheduleEvent(ctx, occ)
+			err = scheduler.ScheduleEvent(ctx, occ, event)
 			require.NoError(t, err)
 		}
 
@@ -245,12 +245,12 @@ func TestScheduler(t *testing.T) {
 		assert.Len(t, results, len(occurrences))
 
 		// Unmarshal Redis results
-		redisOccMap := make(map[string]time.Time)
+		redisSchedMap := make(map[string]time.Time)
 		for _, res := range results {
-			var occ models.Occurrence
-			err := json.Unmarshal([]byte(res), &occ)
+			var sched models.Schedule
+			err := json.Unmarshal([]byte(res), &sched)
 			require.NoError(t, err)
-			redisOccMap[occ.OccurrenceID.String()] = occ.ScheduledAt
+			redisSchedMap[sched.OccurrenceID.String()] = sched.ScheduledAt
 		}
 
 		// Get all occurrences from DB
@@ -260,7 +260,7 @@ func TestScheduler(t *testing.T) {
 
 		// Check DB → Redis
 		for _, occ := range dbOccs {
-			_, found := redisOccMap[occ.OccurrenceID.String()]
+			_, found := redisSchedMap[occ.OccurrenceID.String()]
 			assert.True(t, found, "Occurrence %s in DB not found in Redis", occ.OccurrenceID)
 		}
 
@@ -269,7 +269,7 @@ func TestScheduler(t *testing.T) {
 		for _, occ := range dbOccs {
 			dbOccMap[occ.OccurrenceID.String()] = occ.ScheduledAt
 		}
-		for id, sched := range redisOccMap {
+		for id, sched := range redisSchedMap {
 			dbSched, found := dbOccMap[id]
 			assert.True(t, found, "Occurrence %s in Redis not found in DB", id)
 			assert.Equal(t, dbSched.Unix(), sched.Unix(), "ScheduledAt mismatch for occurrence %s", id)

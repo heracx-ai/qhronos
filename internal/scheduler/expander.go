@@ -73,13 +73,13 @@ func (e *Expander) ExpandEvents(ctx context.Context) error {
 	return nil
 }
 
-// scheduleWithRetry tries to schedule an occurrence in Redis, retrying on timeout/connection errors
-func (e *Expander) scheduleWithRetry(ctx context.Context, occurrence *models.Occurrence) {
+// scheduleWithRetry tries to schedule a schedule object in Redis, retrying on timeout/connection errors
+func (e *Expander) scheduleWithRetry(ctx context.Context, occurrence *models.Occurrence, event *models.Event) {
 	const maxRetries = 3
 	delays := []time.Duration{100 * time.Millisecond, 200 * time.Millisecond, 400 * time.Millisecond}
 	var lastErr error
 	for i := 0; i < maxRetries; i++ {
-		err := e.scheduler.ScheduleEvent(ctx, occurrence)
+		err := e.scheduler.ScheduleEvent(ctx, occurrence, event)
 		if err == nil {
 			return
 		}
@@ -224,7 +224,7 @@ func (e *Expander) expandRecurringEvent(ctx context.Context, event *models.Event
 			Status:       models.OccurrenceStatusPending,
 			Timestamp:    now,
 		}
-		e.scheduleWithRetry(ctx, occurrence)
+		e.scheduleWithRetry(ctx, occurrence, event)
 	}
 
 	return nil
@@ -254,7 +254,7 @@ func (e *Expander) expandNonRecurringEvent(ctx context.Context, event *models.Ev
 		Status:       models.OccurrenceStatusPending,
 		Timestamp:    now,
 	}
-	e.scheduleWithRetry(ctx, occurrence)
+	e.scheduleWithRetry(ctx, occurrence, event)
 
 	return nil
 }

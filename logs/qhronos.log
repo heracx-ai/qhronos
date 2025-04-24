@@ -24,3 +24,11 @@
 {"level":"info","ts":1745465049.855822,"caller":"scheduler/expander.go:245","msg":"Event is in the past, skipping","event_id":"7f699dbd-3e4f-4248-836c-5636260fa433"}
 {"level":"info","ts":1745465335.7143092,"caller":"cmd/main.go:131","msg":"Shutting down server..."}
 {"level":"info","ts":1745465335.7146728,"caller":"scheduler/archiver.go:116","msg":"[archiver] Stopping archival scheduler."}
+{"level":"info","ts":1745480051.051979,"caller":"qhronos/main.go:129","msg":"Configuration loaded","config":{"Server":{"Port":8080,"Timeout":30000000000},"Database":{"Host":"localhost","Port":5433,"User":"postgres","Password":"postgres","DBName":"qhronos","SSLMode":"disable"},"Redis":{"Host":"localhost","Port":6379,"Password":"","DB":0},"Auth":{"MasterToken":"your-master-token-here","JWTSecret":"your-jwt-secret-here"},"HMAC":{"DefaultSecret":"qhronos.io"},"Scheduler":{"LookAheadDuration":86400000000000,"ExpansionInterval":300000000000},"Retention":{"Events":"30d","Occurrences":"7d","CleanupInterval":"1h"},"Archival":{"CheckPeriod":3600000000000},"Logging":{"Level":"info","FilePath":"logs/qhronos.log","MaxSize":50,"MaxBackups":7,"MaxAge":30}}}
+{"level":"info","ts":1745480051.075298,"caller":"scheduler/expander.go:264","msg":"Starting Expander service","interval":300}
+{"level":"info","ts":1745480051.075325,"caller":"scheduler/dispatcher.go:201","msg":"Starting dispatcher"}
+{"level":"info","ts":1745480051.075464,"caller":"qhronos/main.go:232","msg":"Starting server","port":8080}
+{"level":"warn","ts":1745480052.091695,"caller":"scheduler/dispatcher.go:228","msg":"Event not found for occurrence","occurrence_id":123}
+{"level":"warn","ts":1745480052.092536,"caller":"scheduler/dispatcher.go:228","msg":"Event not found for occurrence","occurrence_id":124}
+{"level":"info","ts":1745480056.247108,"caller":"qhronos/main.go:219","msg":"Shutting down server..."}
+{"level":"info","ts":1745480056.247406,"caller":"scheduler/archiver.go:116","msg":"[archiver] Stopping archival scheduler."}

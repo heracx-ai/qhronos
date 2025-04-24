@@ -28,7 +28,8 @@ func timePtr(t time.Time) *time.Time {
 func TestEventHandler(t *testing.T) {
 	db := testutils.TestDB(t)
 	logger := zap.NewNop()
-	eventRepo := repository.NewEventRepository(db, logger)
+	redisClient := testutils.TestRedis(t)
+	eventRepo := repository.NewEventRepository(db, logger, redisClient)
 	handler := NewEventHandler(eventRepo)
 
 	cleanup := func() {

@@ -4,6 +4,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
+	"gorm.io/datatypes"
 )
 
 type OccurrenceStatus string
@@ -44,4 +46,15 @@ type PaginatedResponse struct {
 		Limit int `json:"limit"`
 		Total int `json:"total"`
 	} `json:"pagination"`
+}
+
+// Schedule is used for storing scheduled events in Redis with all event fields (no prefix)
+type Schedule struct {
+	Occurrence
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	WebhookURL  string         `json:"webhook_url"`
+	Metadata    datatypes.JSON `json:"metadata"`
+	Tags        pq.StringArray `json:"tags"`
+	// Add more event fields here if needed for dispatch
 }

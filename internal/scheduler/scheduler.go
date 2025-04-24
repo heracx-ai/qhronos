@@ -14,7 +14,7 @@ import (
 
 const (
 	// Redis key for scheduled events
-	scheduleKey = "schedule:events"
+	scheduleKey = "schedules"
 	// Redis key for recurring events
 	recurringKey = "recurring:events"
 )
@@ -32,15 +32,23 @@ func NewScheduler(redis *redis.Client, logger *zap.Logger) *Scheduler {
 }
 
 // ScheduleEvent schedules a single event occurrence
-func (s *Scheduler) ScheduleEvent(ctx context.Context, occurrence *models.Occurrence) error {
-	// Convert occurrence to JSON
-	data, err := json.Marshal(occurrence)
+func (s *Scheduler) ScheduleEvent(ctx context.Context, occurrence *models.Occurrence, event *models.Event) error {
+	// Combine occurrence and event fields into Schedule
+	sched := models.Schedule{
+		Occurrence:  *occurrence,
+		Name:        event.Name,
+		Description: event.Description,
+		WebhookURL:  event.WebhookURL,
+		Metadata:    event.Metadata,
+		Tags:        event.Tags,
+	}
+	// Marshal Schedule to JSON
+	data, err := json.Marshal(sched)
 	if err != nil {
-		return fmt.Errorf("failed to marshal occurrence: %w", err)
+		return fmt.Errorf("failed to marshal schedule: %w", err)
 	}
 
 	// Add to Redis sorted set with scheduled_at as score
-	// Use millisecond precision for the score to avoid collisions
 	score := float64(occurrence.ScheduledAt.UnixMilli())
 	_, err = s.redis.ZAdd(ctx, scheduleKey, redis.Z{
 		Score:  score,
@@ -67,34 +75,34 @@ func (s *Scheduler) ScheduleRecurringEvent(ctx context.Context, event *models.Ev
 	return err
 }
 
-// GetDueOccurrence retrieves occurrences that are due for execution
-func (s *Scheduler) GetDueOccurrence(ctx context.Context) ([]*models.Occurrence, error) {
+// GetDueSchedules retrieves schedules that are due for execution
+func (s *Scheduler) GetDueSchedules(ctx context.Context) ([]*models.Schedule, error) {
 	now := time.Now().UnixMilli()
 
-	// Get all occurrences due up to now
+	// Get all schedules due up to now
 	results, err := s.redis.ZRangeByScore(ctx, scheduleKey, &redis.ZRangeBy{
 		Min: "0",
 		Max: fmt.Sprintf("%d", now),
 	}).Result()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get due occurrences from Redis: %w", err)
+		return nil, fmt.Errorf("failed to get due schedules from Redis: %w", err)
 	}
 
-	var occurrences []*models.Occurrence
+	var schedules []*models.Schedule
 	for _, result := range results {
-		var occ models.Occurrence
-		if err := json.Unmarshal([]byte(result), &occ); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal occurrence: %w", err)
+		var sched models.Schedule
+		if err := json.Unmarshal([]byte(result), &sched); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal schedule: %w", err)
 		}
-		occurrences = append(occurrences, &occ)
+		schedules = append(schedules, &sched)
 
-		// Remove the current occurrence
+		// Remove the current schedule
 		if err := s.redis.ZRem(ctx, scheduleKey, result).Err(); err != nil {
-			return nil, fmt.Errorf("failed to remove processed occurrence: %w", err)
+			return nil, fmt.Errorf("failed to remove processed schedule: %w", err)
 		}
 	}
 
-	return occurrences, nil
+	return schedules, nil
 }
 
 // RemoveScheduledEvent removes a scheduled event from Redis

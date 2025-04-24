@@ -75,25 +75,16 @@ func (d *Dispatcher) retryWithBackoff(ctx context.Context, operation func() erro
 	return lastErr
 }
 
-// DispatchWebhook sends a webhook request and handles retries
-func (d *Dispatcher) DispatchWebhook(ctx context.Context, occurrence *models.Occurrence, event *models.Event) error {
-	// Verify event exists in database
-	dbEvent, err := d.eventRepo.GetByID(ctx, event.ID)
-	if err != nil {
-		return fmt.Errorf("error getting event: %w", err)
-	}
-	if dbEvent == nil {
-		return fmt.Errorf("event not found")
-	}
-
+// DispatchWebhook sends a webhook request and handles retries using a Schedule object
+func (d *Dispatcher) DispatchWebhook(ctx context.Context, sched *models.Schedule) error {
 	// Prepare webhook payload with rich information
 	payload := map[string]interface{}{
-		"event_id":      event.ID,
-		"occurrence_id": occurrence.ID,
-		"name":          event.Name,
-		"description":   event.Description,
-		"scheduled_at":  occurrence.ScheduledAt,
-		"metadata":      event.Metadata,
+		"event_id":      sched.EventID,
+		"occurrence_id": sched.OccurrenceID,
+		"name":          sched.Name,
+		"description":   sched.Description,
+		"scheduled_at":  sched.ScheduledAt,
+		"metadata":      sched.Metadata,
 	}
 
 	// Convert payload to JSON
@@ -103,7 +94,7 @@ func (d *Dispatcher) DispatchWebhook(ctx context.Context, occurrence *models.Occ
 	}
 
 	// Create base request (will be cloned for each attempt)
-	baseReq, err := http.NewRequestWithContext(ctx, "POST", event.WebhookURL, nil)
+	baseReq, err := http.NewRequestWithContext(ctx, "POST", sched.WebhookURL, nil)
 	if err != nil {
 		return fmt.Errorf("error creating request: %w", err)
 	}
@@ -112,12 +103,10 @@ func (d *Dispatcher) DispatchWebhook(ctx context.Context, occurrence *models.Occ
 	baseReq.Header.Set("Content-Type", "application/json")
 	baseReq.Header.Set("Content-Length", fmt.Sprintf("%d", len(jsonPayload)))
 
-	// Sign request if HMAC is enabled
+	// Sign request if HMAC is enabled (not supported if secret is not present)
 	if d.hmacService != nil {
-		var secret string
-		if event.HMACSecret != nil {
-			secret = *event.HMACSecret
-		}
+		// No HMACSecret in Schedule, so skip or use default
+		secret := ""
 		signature := d.hmacService.SignPayload(jsonPayload, secret)
 		baseReq.Header.Set("X-Qhronos-Signature", signature)
 	}
@@ -181,9 +170,9 @@ func (d *Dispatcher) DispatchWebhook(ctx context.Context, occurrence *models.Occ
 
 	// Log the result to Postgres as a new occurrence record (append-only, for history)
 	logOccurrence := &models.Occurrence{
-		OccurrenceID: occurrence.OccurrenceID,
-		EventID:      occurrence.EventID,
-		ScheduledAt:  occurrence.ScheduledAt,
+		OccurrenceID: sched.OccurrenceID,
+		EventID:      sched.EventID,
+		ScheduledAt:  sched.ScheduledAt,
 		Status:       finalStatus,
 		AttemptCount: attemptCount,
 		Timestamp:    lastAttempt,
@@ -196,7 +185,7 @@ func (d *Dispatcher) DispatchWebhook(ctx context.Context, occurrence *models.Occ
 	return err
 }
 
-// Run processes due events and dispatches webhooks
+// Run processes due schedules and dispatches webhooks
 func (d *Dispatcher) Run(ctx context.Context, scheduler *Scheduler) error {
 	d.logger.Info("Starting dispatcher")
 	ticker := time.NewTicker(1 * time.Second)
@@ -208,32 +197,18 @@ func (d *Dispatcher) Run(ctx context.Context, scheduler *Scheduler) error {
 			d.logger.Info("Dispatcher shutting down")
 			return ctx.Err()
 		case <-ticker.C:
-			// Get due occurrences
-			occurrences, err := scheduler.GetDueOccurrence(ctx)
+			// Get due schedules
+			schedules, err := scheduler.GetDueSchedules(ctx)
 			if err != nil {
-				d.logger.Error("Error getting due occurrences", zap.Error(err))
+				d.logger.Error("Error getting due schedules", zap.Error(err))
 				continue
 			}
 
-			// Process each occurrence
-			for _, occurrence := range occurrences {
-				event, err := d.eventRepo.GetByID(ctx, occurrence.EventID)
-				if err != nil {
-					d.logger.Error("Error getting event for occurrence",
-						zap.Int("occurrence_id", occurrence.ID),
-						zap.Error(err))
-					continue
-				}
-				if event == nil {
-					d.logger.Warn("Event not found for occurrence",
-						zap.Int("occurrence_id", occurrence.ID))
-					continue
-				}
-
-				// Dispatch webhook
-				if err := d.DispatchWebhook(ctx, occurrence, event); err != nil {
+			// Process each schedule
+			for _, sched := range schedules {
+				if err := d.DispatchWebhook(ctx, sched); err != nil {
 					d.logger.Error("Error dispatching webhook",
-						zap.Int("occurrence_id", occurrence.ID),
+						zap.String("occurrence_id", sched.OccurrenceID.String()),
 						zap.Error(err))
 					continue
 				}

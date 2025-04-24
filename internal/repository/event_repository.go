@@ -11,16 +11,18 @@ import (
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 	"github.com/lib/pq"
+	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 )
 
 type EventRepository struct {
 	db     *sqlx.DB
 	logger *zap.Logger
+	redis  *redis.Client
 }
 
-func NewEventRepository(db *sqlx.DB, logger *zap.Logger) *EventRepository {
-	return &EventRepository{db: db, logger: logger}
+func NewEventRepository(db *sqlx.DB, logger *zap.Logger, redis *redis.Client) *EventRepository {
+	return &EventRepository{db: db, logger: logger, redis: redis}
 }
 
 func timePtr(t time.Time) *time.Time {
@@ -161,6 +163,33 @@ func (r *EventRepository) Delete(ctx context.Context, id uuid.UUID) error {
 		return fmt.Errorf("error deleting event: %w", err)
 	}
 
+	// Remove all scheduled occurrences for this event from Redis
+	err = r.removeEventOccurrencesFromRedis(ctx, id)
+	if err != nil {
+		r.logger.Warn("Failed to remove event occurrences from Redis", zap.String("event_id", id.String()), zap.Error(err))
+	}
+
+	// Remove recurring event from Redis (if present)
+	_ = r.redis.HDel(ctx, "recurring:events", id.String()).Err()
+
+	return nil
+}
+
+// removeEventOccurrencesFromRedis removes all scheduled occurrences for an event from Redis
+func (r *EventRepository) removeEventOccurrencesFromRedis(ctx context.Context, eventID uuid.UUID) error {
+	results, err := r.redis.ZRange(ctx, "schedule:events", 0, -1).Result()
+	if err != nil {
+		return err
+	}
+	for _, res := range results {
+		var occ models.Occurrence
+		if err := json.Unmarshal([]byte(res), &occ); err != nil {
+			continue // skip invalid
+		}
+		if occ.EventID == eventID {
+			r.redis.ZRem(ctx, "schedule:events", res)
+		}
+	}
 	return nil
 }
 

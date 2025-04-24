@@ -39,3 +39,6 @@ data/redis/
 
 # Binaries directory
 bin/ 
+
+# Logs directory
+logs/

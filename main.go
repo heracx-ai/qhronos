@@ -150,7 +150,7 @@ func main() {
 	defer redisClient.Close()
 
 	// Initialize repositories
-	eventRepo := repository.NewEventRepository(db, logger)
+	eventRepo := repository.NewEventRepository(db, logger, redisClient)
 	occurrenceRepo := repository.NewOccurrenceRepository(db, logger)
 
 	// Initialize scheduler services
