@@ -21,15 +21,17 @@ type LoggingConfig struct {
 }
 
 type Config struct {
-	Server    ServerConfig    `mapstructure:"server"`
-	Database  DatabaseConfig  `mapstructure:"database"`
-	Redis     RedisConfig     `mapstructure:"redis"`
-	Auth      AuthConfig      `mapstructure:"auth"`
-	HMAC      HMACConfig      `mapstructure:"hmac"`
-	Scheduler SchedulerConfig `mapstructure:"scheduler"`
-	Retention RetentionConfig `mapstructure:"retention"`
-	Archival  ArchivalConfig  `mapstructure:"archival"`
-	Logging   LoggingConfig   `mapstructure:"logging"`
+	Server               ServerConfig    `mapstructure:"server"`
+	Database             DatabaseConfig  `mapstructure:"database"`
+	Redis                RedisConfig     `mapstructure:"redis"`
+	Auth                 AuthConfig      `mapstructure:"auth"`
+	HMAC                 HMACConfig      `mapstructure:"hmac"`
+	Scheduler            SchedulerConfig `mapstructure:"scheduler"`
+	Retention            RetentionConfig `mapstructure:"retention"`
+	Archival             ArchivalConfig  `mapstructure:"archival"`
+	Logging              LoggingConfig   `mapstructure:"logging"`
+	DispatchMaxRetries   int             `mapstructure:"dispatch_max_retries" yaml:"dispatch_max_retries"`
+	DispatchRetryBackoff time.Duration   `mapstructure:"dispatch_retry_backoff" yaml:"dispatch_retry_backoff"`
 }
 
 type ServerConfig struct {
@@ -112,6 +114,8 @@ func Load() (*Config, error) {
 	viper.SetDefault("logging.max_size", 10)
 	viper.SetDefault("logging.max_backups", 3)
 	viper.SetDefault("logging.max_age", 7)
+	viper.SetDefault("dispatch_max_retries", 3)
+	viper.SetDefault("dispatch_retry_backoff", "1s")
 
 	// Read environment variables
 	viper.AutomaticEnv()
@@ -224,6 +228,8 @@ func LoadWithPath(path string) (*Config, error) {
 	viper.SetDefault("logging.max_size", 10)
 	viper.SetDefault("logging.max_backups", 3)
 	viper.SetDefault("logging.max_age", 7)
+	viper.SetDefault("dispatch_max_retries", 3)
+	viper.SetDefault("dispatch_retry_backoff", "1s")
 
 	viper.AutomaticEnv()
 

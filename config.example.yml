@@ -37,3 +37,9 @@ logging:
   max_size: 50            # Max size (MB) before rotation
   max_backups: 7          # Max number of old log files to retain
   max_age: 30             # Max age (days) to retain old log files 
+
+# Dispatcher retry and backoff settings
+# Number of times to retry dispatch (both HTTP and WebSocket)
+dispatch_max_retries: 3
+# Backoff duration between retries (e.g., 5s, 1m)
+dispatch_retry_backoff: 5s 

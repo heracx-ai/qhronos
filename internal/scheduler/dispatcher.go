@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/feedloop/qhronos/internal/models"
@@ -16,6 +17,14 @@ import (
 	"go.uber.org/zap"
 )
 
+// ClientNotifier abstracts WebSocket client dispatch
+// (or use your preferred mock generator)
+//
+//go:generate mockery --name=ClientNotifier --output=../mocks --case=underscore
+type ClientNotifier interface {
+	DispatchToClient(clientID string, payload []byte) error
+}
+
 type Dispatcher struct {
 	eventRepo      *repository.EventRepository
 	occurrenceRepo *repository.OccurrenceRepository
@@ -24,6 +33,7 @@ type Dispatcher struct {
 	maxRetries     int
 	retryDelay     time.Duration
 	logger         *zap.Logger
+	clientNotifier ClientNotifier // optional, for q: webhooks
 }
 
 // HTTPClient interface for mocking HTTP requests
@@ -40,15 +50,16 @@ func (d *DefaultHTTPClient) Do(req *http.Request) (*http.Response, error) {
 	return d.client.Do(req)
 }
 
-func NewDispatcher(eventRepo *repository.EventRepository, occurrenceRepo *repository.OccurrenceRepository, hmacService *services.HMACService, logger *zap.Logger) *Dispatcher {
+func NewDispatcher(eventRepo *repository.EventRepository, occurrenceRepo *repository.OccurrenceRepository, hmacService *services.HMACService, logger *zap.Logger, maxRetries int, retryDelay time.Duration, clientNotifier ClientNotifier) *Dispatcher {
 	return &Dispatcher{
 		eventRepo:      eventRepo,
 		occurrenceRepo: occurrenceRepo,
 		hmacService:    hmacService,
 		client:         &DefaultHTTPClient{client: &http.Client{Timeout: 10 * time.Second}},
-		maxRetries:     3,
-		retryDelay:     5 * time.Second,
+		maxRetries:     maxRetries,
+		retryDelay:     retryDelay,
 		logger:         logger,
+		clientNotifier: clientNotifier,
 	}
 }
 
@@ -78,6 +89,47 @@ func (d *Dispatcher) retryWithBackoff(ctx context.Context, operation func() erro
 
 // DispatchWebhook sends a webhook request and handles retries using a Schedule object
 func (d *Dispatcher) DispatchWebhook(ctx context.Context, sched *models.Schedule) error {
+	if strings.HasPrefix(sched.Webhook, "q:") {
+		if d.clientNotifier == nil {
+			return fmt.Errorf("client notifier not configured for q: webhooks")
+		}
+		clientID := strings.TrimPrefix(sched.Webhook, "q:")
+		payload := map[string]interface{}{
+			"event_id":      sched.EventID,
+			"occurrence_id": sched.OccurrenceID,
+			"name":          sched.Name,
+			"description":   sched.Description,
+			"scheduled_at":  sched.ScheduledAt,
+			"metadata":      sched.Metadata,
+		}
+		jsonPayload, err := json.Marshal(payload)
+		if err != nil {
+			return fmt.Errorf("error marshaling payload: %w", err)
+		}
+		var dispatchErr error
+		dispatchErr = d.retryWithBackoff(ctx, func() error {
+			return d.clientNotifier.DispatchToClient(clientID, jsonPayload)
+		})
+		// Log occurrence as before (reuse code)
+		// ... (copy occurrence logging from HTTP path, set status based on dispatchErr) ...
+		finalStatus := models.OccurrenceStatusCompleted
+		if dispatchErr != nil {
+			finalStatus = models.OccurrenceStatusFailed
+		}
+		logOccurrence := &models.Occurrence{
+			OccurrenceID: sched.OccurrenceID,
+			EventID:      sched.EventID,
+			ScheduledAt:  sched.ScheduledAt,
+			Status:       finalStatus,
+			AttemptCount: 1, // or track attempts if needed
+			Timestamp:    time.Now(),
+			StatusCode:   0,
+			ResponseBody: "",
+			ErrorMessage: fmt.Sprintf("client hook dispatch: %v", dispatchErr),
+		}
+		_ = d.occurrenceRepo.Create(ctx, logOccurrence)
+		return dispatchErr
+	}
 	// Prepare webhook payload with rich information
 	payload := map[string]interface{}{
 		"event_id":      sched.EventID,
@@ -121,7 +173,7 @@ func (d *Dispatcher) DispatchWebhook(ctx context.Context, sched *models.Schedule
 	var errorMessage string
 
 	// Execute webhook request with retries
-	err = d.retryWithBackoff(ctx, func() error {
+	dispatchErr := d.retryWithBackoff(ctx, func() error {
 		attemptCount++
 		lastAttempt = time.Now()
 		// Clone the base request and set the body for this attempt
@@ -185,12 +237,15 @@ func (d *Dispatcher) DispatchWebhook(ctx context.Context, sched *models.Schedule
 
 	// Auto-inactivate one-time events after dispatch (success or max retries)
 	event, err := d.eventRepo.GetByID(ctx, sched.EventID)
-	if err == nil && event != nil && event.Schedule == nil && event.Status == "active" {
+	if event == nil {
+		return fmt.Errorf("event not found: %s", sched.EventID)
+	}
+	if err == nil && event.Schedule == nil && event.Status == "active" {
 		event.Status = "inactive"
 		_ = d.eventRepo.Update(ctx, event)
 	}
 
-	return err
+	return dispatchErr
 }
 
 const dispatchProcessingKey = "dispatch:processing"

@@ -11,6 +11,7 @@ import (
 
 	"github.com/feedloop/qhronos/internal/models"
 	"github.com/feedloop/qhronos/internal/repository"
+	"github.com/feedloop/qhronos/internal/scheduler"
 	"github.com/feedloop/qhronos/internal/testutils"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -30,7 +31,18 @@ func TestEventHandler(t *testing.T) {
 	logger := zap.NewNop()
 	redisClient := testutils.TestRedis(t)
 	eventRepo := repository.NewEventRepository(db, logger, redisClient)
-	handler := NewEventHandler(eventRepo)
+	occurrenceRepo := repository.NewOccurrenceRepository(db, logger)
+	schedulerService := scheduler.NewScheduler(redisClient, logger)
+	expander := scheduler.NewExpander(
+		schedulerService,
+		eventRepo,
+		occurrenceRepo,
+		24*time.Hour,  // lookAheadDuration
+		1*time.Minute, // expansionInterval
+		0,             // gracePeriod
+		logger,
+	)
+	handler := NewEventHandler(eventRepo, expander)
 
 	cleanup := func() {
 		ctx := context.Background()

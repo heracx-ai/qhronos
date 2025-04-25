@@ -37,6 +37,40 @@ func (m *MockHTTPClient) Do(req *http.Request) (*http.Response, error) {
 	return resp.(*http.Response), args.Error(1)
 }
 
+// MockClientNotifier implements ClientNotifier for tests
+// Tracks calls and simulates connected/disconnected clients and round-robin
+
+type MockClientNotifier struct {
+	connected map[string][]string // clientID -> list of "client" names (simulate connections)
+	calls     []string            // record of dispatches (clientID:clientIndex)
+	fail      map[string]bool     // clientID -> should fail
+	indices   map[string]int      // round-robin index per clientID
+}
+
+func NewMockClientNotifier() *MockClientNotifier {
+	return &MockClientNotifier{
+		connected: make(map[string][]string),
+		calls:     []string{},
+		fail:      make(map[string]bool),
+		indices:   make(map[string]int),
+	}
+}
+
+func (m *MockClientNotifier) DispatchToClient(clientID string, payload []byte) error {
+	clients := m.connected[clientID]
+	if len(clients) == 0 {
+		m.calls = append(m.calls, clientID)
+		return fmt.Errorf("no client connected for id: %s", clientID)
+	}
+	idx := m.indices[clientID] % len(clients)
+	m.calls = append(m.calls, fmt.Sprintf("%s:%s", clientID, clients[idx]))
+	m.indices[clientID] = (m.indices[clientID] + 1) % len(clients)
+	if m.fail[clientID] {
+		return fmt.Errorf("simulated failure for %s", clientID)
+	}
+	return nil
+}
+
 func TestDispatcher(t *testing.T) {
 	ctx := context.Background()
 	db := testutils.TestDB(t)
@@ -47,7 +81,7 @@ func TestDispatcher(t *testing.T) {
 	hmacService := services.NewHMACService("test-secret")
 	mockHTTP := new(MockHTTPClient)
 
-	dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger)
+	dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, nil)
 	dispatcher.SetHTTPClient(mockHTTP)
 
 	// Add cleanup function
@@ -203,6 +237,77 @@ func TestDispatcher(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, models.OccurrenceStatusFailed, updatedSchedule.Status)
 	})
+
+	// Add client hook tests
+	t.Run("client hook dispatch - single client", func(t *testing.T) {
+		cleanup()
+		mockNotifier := NewMockClientNotifier()
+		mockNotifier.connected["client1"] = []string{"c1"}
+		dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, mockNotifier)
+		// Create schedule with q: webhook
+		schedule := &models.Schedule{
+			Occurrence: models.Occurrence{
+				OccurrenceID: uuid.New(),
+				EventID:      uuid.New(),
+				ScheduledAt:  time.Now(),
+			},
+			Name:        "Client Hook Event",
+			Description: "Test client hook",
+			Webhook:     "q:client1",
+			Metadata:    []byte(`{"key": "value"}`),
+			Tags:        pq.StringArray{"test"},
+		}
+		err := dispatcher.DispatchWebhook(ctx, schedule)
+		assert.NoError(t, err)
+		assert.Equal(t, []string{"client1:c1"}, mockNotifier.calls)
+	})
+
+	t.Run("client hook dispatch - no client connected", func(t *testing.T) {
+		cleanup()
+		mockNotifier := NewMockClientNotifier()
+		dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 2, 10*time.Millisecond, mockNotifier)
+		schedule := &models.Schedule{
+			Occurrence: models.Occurrence{
+				OccurrenceID: uuid.New(),
+				EventID:      uuid.New(),
+				ScheduledAt:  time.Now(),
+			},
+			Name:        "Client Hook Event",
+			Description: "Test client hook",
+			Webhook:     "q:client2",
+			Metadata:    []byte(`{"key": "value"}`),
+			Tags:        pq.StringArray{"test"},
+		}
+		err := dispatcher.DispatchWebhook(ctx, schedule)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "no client connected")
+		assert.Equal(t, 3, len(mockNotifier.calls)) // 3 attempts (initial + 2 retries)
+	})
+
+	t.Run("client hook dispatch - round robin", func(t *testing.T) {
+		cleanup()
+		mockNotifier := NewMockClientNotifier()
+		mockNotifier.connected["client3"] = []string{"c1", "c2"}
+		dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Millisecond, mockNotifier)
+		schedule := &models.Schedule{
+			Occurrence: models.Occurrence{
+				OccurrenceID: uuid.New(),
+				EventID:      uuid.New(),
+				ScheduledAt:  time.Now(),
+			},
+			Name:        "Client Hook Event",
+			Description: "Test client hook",
+			Webhook:     "q:client3",
+			Metadata:    []byte(`{"key": "value"}`),
+			Tags:        pq.StringArray{"test"},
+		}
+		for i := 0; i < 4; i++ {
+			err := dispatcher.DispatchWebhook(ctx, schedule)
+			assert.NoError(t, err)
+		}
+		// Should alternate between c1 and c2
+		assert.Equal(t, []string{"client3:c1", "client3:c2", "client3:c1", "client3:c2"}, mockNotifier.calls)
+	})
 }
 
 func TestDispatcher_RedisOnlyDispatch(t *testing.T) {
@@ -215,7 +320,7 @@ func TestDispatcher_RedisOnlyDispatch(t *testing.T) {
 	occurrenceRepo := repository.NewOccurrenceRepository(db, logger)
 	hmacService := services.NewHMACService("test-secret")
 	mockHTTP := new(MockHTTPClient)
-	dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger)
+	dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, nil)
 	dispatcher.SetHTTPClient(mockHTTP)
 
 	// Create Scheduler instance
@@ -288,7 +393,7 @@ func TestDispatcher_GetDueSchedules(t *testing.T) {
 	occurrenceRepo := repository.NewOccurrenceRepository(db, logger)
 	hmacService := services.NewHMACService("test-secret")
 	mockHTTP := new(MockHTTPClient)
-	dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger)
+	dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, nil)
 	dispatcher.SetHTTPClient(mockHTTP)
 
 	// Create Scheduler instance
@@ -380,7 +485,7 @@ func TestDispatcher_DispatchQueueWorker(t *testing.T) {
 	occurrenceRepo := repository.NewOccurrenceRepository(db, logger)
 	hmacService := services.NewHMACService("test-secret")
 	mockHTTP := new(MockHTTPClient)
-	dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger)
+	dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, nil)
 	dispatcher.SetHTTPClient(mockHTTP)
 	scheduler := NewScheduler(redisClient, logger)
 

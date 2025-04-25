@@ -186,6 +186,44 @@ scheduler:
 
 Adjust these values in your `config.yaml` to tune scheduling behavior for your workload.
 
+## WebSocket Real-Time Event Delivery
+
+Qhronos supports real-time event delivery via a WebSocket endpoint at `/ws`.
+
+### Connection Types
+- **Client-Hook Listener:** Receives events where the event webhook is `q:<client-name>`.
+- **Tag-Based Listener:** Receives events that match any of the specified tags.
+
+### Usage
+1. Connect to the WebSocket endpoint:
+   ```
+   ws://<host>/ws
+   ```
+2. Send an initial handshake message:
+   - For client-hook:
+     ```json
+     { "type": "client-hook", "client_name": "acme-corp", "token": "<JWT>" }
+     ```
+   - For tag-listener:
+     ```json
+     { "type": "tag-listener", "tags": ["billing", "urgent"], "token": "<JWT>" }
+     ```
+3. On success, the server will send event messages as they occur:
+   ```json
+   { "type": "event", "event_id": "evt_123", "occurrence_id": "occ_456", "payload": { ... }, "tags": ["foo", "bar"] }
+   ```
+4. (Client-hook only) To acknowledge receipt:
+   ```json
+   { "type": "ack", "event_id": "evt_123", "occurrence_id": "occ_456" }
+   ```
+   - Tag-listener connections will receive an error if they send an ack message.
+
+### Security
+- All connections require authentication via JWT or master token.
+- Only authorized clients receive events for their hooks or allowed tags.
+
+See the design document for more details on message flows and security.
+
 ## Deployment
 - Supports Docker, Docker Compose, and Kubernetes.
 - See [deployment guide](docs/deployment.md) for production tips.

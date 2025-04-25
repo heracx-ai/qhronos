@@ -179,6 +179,9 @@ func main() {
 	eventRepo := repository.NewEventRepository(db, logger, redisClient)
 	occurrenceRepo := repository.NewOccurrenceRepository(db, logger)
 
+	// Initialize WebSocket handler (ClientNotifier)
+	wsHandler := handlers.NewWebSocketHandler(db)
+
 	// Initialize scheduler services
 	schedulerService := scheduler.NewScheduler(redisClient, logger)
 	expander := scheduler.NewExpander(
@@ -194,7 +197,7 @@ func main() {
 	// Initialize services
 	tokenService := services.NewTokenService(cfg.Auth.MasterToken, cfg.Auth.JWTSecret)
 	hmacService := services.NewHMACService(cfg.HMAC.DefaultSecret)
-	dispatcher := scheduler.NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger)
+	dispatcher := scheduler.NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, cfg.DispatchMaxRetries, cfg.DispatchRetryBackoff, wsHandler)
 
 	// Initialize handlers
 	eventHandler := handlers.NewEventHandler(eventRepo, expander)
@@ -213,6 +216,10 @@ func main() {
 
 	// Register request ID middleware
 	router.Use(middleware.RequestIDMiddleware(logger))
+
+	// Register WebSocket endpoint
+	router.GET("/ws", wsHandler.Handle)
+	logger.Info("WebSocket server listening", zap.String("endpoint", "/ws"))
 
 	// Setup routes with middleware
 	api.SetupRoutes(router, eventHandler, occurrenceHandler, tokenHandler, rateLimiter, cfg.Auth.MasterToken)

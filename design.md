@@ -169,6 +169,9 @@ Qhronos uses JWT tokens and a master token for API authentication. Access contro
 ### Health & Status Endpoints
 - `/status` and `/health` endpoints provide service health and configuration information for monitoring and automation.
 
+### Analytics & Metrics (Planned)
+While the schema includes tables for analytics and performance metrics, the current implementation does not yet include background jobs or API endpoints for populating or exposing these metrics. This is a planned enhancement.
+
 ---
 
 ## 6. Data Model
@@ -192,8 +195,7 @@ Qhronos uses JWT tokens and a master token for API authentication. Access contro
 - **webhook_attempts:** Logs each attempt to deliver a webhook for an occurrence, including status and response.
 - **archived_events / archived_occurrences / archived_webhook_attempts:** Long-term storage for data past retention windows.
 - **system_config:** Stores global configuration and retention policies.
-- **analytics_daily / analytics_hourly:** Aggregated statistics for monitoring and reporting.
-- **performance_metrics:** Tracks system and infrastructure performance over time.
+- **analytics_daily / analytics_hourly / performance_metrics:** Tables for aggregated statistics and system performance. **Note:** These tables are present in the schema for future use. As of the current implementation, they are not yet populated or queried by the application logic. Enhanced analytics and reporting are planned for a future release.
 
 ## 7. API Reference
 
@@ -224,6 +226,8 @@ Qhronos uses JWT tokens and a master token for API authentication. Access contro
 - 404: Not Found (resource does not exist)
 - 429: Too Many Requests (rate limit exceeded)
 - 500: Internal Server Error
+
+**Note:** Analytics and metrics endpoints are not yet available. Planned for a future release.
 
 ## 8. Security
 
@@ -279,6 +283,62 @@ Qhronos uses JWT tokens and a master token for API authentication. Access contro
 - Custom authentication providers
 - Additional notification channels (e.g., email, SMS)
 - Pluggable storage or queue backends
+
+### Planned Features
+- Enhanced analytics and reporting (planned; schema support exists, but not yet implemented in code)
+
+## 11. WebSocket Server Design
+
+### Overview
+Qhronos provides a WebSocket server to enable real-time event delivery for two types of clients:
+- **Client-Hook Listener:** Listens for events where the event webhook is of the form `webhook: "q:<client-name>"`.
+- **Tag-Based Listener:** Listens for events that have certain tags.
+
+### Connection Types & Handshake
+- Clients connect to the `/ws` endpoint and send an initial JSON message specifying:
+  - `type`: `"client-hook"` or `"tag-listener"`
+  - `client_name`: (for client-hook)
+  - `tags`: (for tag-listener, array of strings)
+  - `token`: (JWT or master token for authentication)
+- The server authenticates the client and registers the connection under the appropriate registry.
+
+### Message Flows
+- **Event Dispatch:**
+  - If an event's webhook is `q:<client-name>`, the event is sent to all `client-hook` connections for that client.
+  - If an event has any of the subscribed tags, it is sent to all `tag-listener` connections for those tags.
+- **Acknowledge (Ack):**
+  - Only `client-hook` connections may send an `ack` message to confirm receipt of an event occurrence. The server marks the occurrence as acknowledged and may stop retries.
+  - `tag-listener` connections receive an error if they send an `ack` message.
+
+### Message Examples
+- **Initial Handshake (client-hook):**
+  ```json
+  { "type": "client-hook", "client_name": "acme-corp", "token": "<JWT>" }
+  ```
+- **Initial Handshake (tag-listener):**
+  ```json
+  { "type": "tag-listener", "tags": ["billing", "urgent"], "token": "<JWT>" }
+  ```
+- **Event Message:**
+  ```json
+  { "type": "event", "event_id": "evt_123", "occurrence_id": "occ_456", "payload": { ... }, "tags": ["foo", "bar"] }
+  ```
+- **Acknowledge (client-hook only):**
+  ```json
+  { "type": "ack", "event_id": "evt_123", "occurrence_id": "occ_456" }
+  ```
+- **Error (e.g., ack from tag-listener):**
+  ```json
+  { "type": "error", "message": "acknowledge not supported for tag-listener" }
+  ```
+
+### Connection Lifecycle
+- The server handles disconnects and cleans up registries.
+- Only control frames (ping/pong/close) and, for client-hook, `ack` messages are allowed after handshake. Other messages result in an error.
+
+### Security
+- All connections are authenticated.
+- Access control ensures clients only receive events for their own hooks or allowed tags.
 
 ---
 
