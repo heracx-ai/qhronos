@@ -597,8 +597,8 @@ func TestDispatcher_DispatchQueueWorker(t *testing.T) {
 		err = redisClient.RPush(ctx, dispatchQueueKey, data).Err()
 		require.NoError(t, err)
 
-		// Setup HTTP mock to always fail for every attempt
-		mockHTTP.On("Do", mock.AnythingOfType("*http.Request")).Return((*http.Response)(nil), errors.New("fail")).Maybe()
+		// Setup HTTP mock to always fail for every attempt (expect maxRetries+1 calls)
+		mockHTTP.On("Do", mock.AnythingOfType("*http.Request")).Return((*http.Response)(nil), errors.New("fail")).Times(dispatcher.maxRetries + 1)
 
 		// Run worker and wait for completion (wait for 2 retries, less than maxRetries=3)
 		runWorkerAndWait(ctx, dispatcher, scheduler, 400*time.Millisecond)

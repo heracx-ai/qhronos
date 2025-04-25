@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Exit on error
-set -e
+# Exit on error (disabled to allow all tests to run)
+# set -e
 
 # Wait for PostgreSQL to be ready
 echo "Waiting for PostgreSQL to be ready..."
@@ -50,6 +50,8 @@ PKGS=$(go list ./internal/...)
 
 PASS_COUNT=0
 FAIL_COUNT=0
+ALL_TEST_OUTPUT=""
+FAIL_OUTPUTS=""
 
 for PKG in $PKGS; do
   echo -e "\n=== Running tests in $PKG ==="
@@ -60,18 +62,32 @@ for PKG in $PKGS; do
   fi
   for test in $TESTS; do
     echo -e "\n--- Running $test in $PKG ---"
-    if go test -v -run "^$test$" $PKG; then
+    TEST_OUTPUT=$(go test -v -run "^$test$" $PKG)
+    echo "$TEST_OUTPUT"
+    ALL_TEST_OUTPUT="$ALL_TEST_OUTPUT\n$TEST_OUTPUT"
+    if echo "$TEST_OUTPUT" | grep -q '^--- PASS'; then
       PASS_COUNT=$((PASS_COUNT+1))
     else
       FAIL_COUNT=$((FAIL_COUNT+1))
+      FAIL_OUTPUTS="$FAIL_OUTPUTS\n\n===== FAILED TEST: $test in $PKG =====\n$TEST_OUTPUT"
     fi
   done
+  
+  # Optionally, you can add a small sleep here if needed
+  # sleep 0.1
+
 done
 
+# Count all '=== RUN' lines (including subtests)
+RUN_COUNT=$(echo "$ALL_TEST_OUTPUT" | grep '^=== RUN' | wc -l)
 echo -e "\nAll tests completed."
 echo "Passed: $PASS_COUNT"
 echo "Failed: $FAIL_COUNT"
+echo "Total RUN (including subtests): $RUN_COUNT"
+
 if [ "$FAIL_COUNT" -ne 0 ]; then
+  echo -e "\n\n==================== FAILED TEST OUTPUTS ===================="
+  echo -e "$FAIL_OUTPUTS"
   exit 1
 fi
 
