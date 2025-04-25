@@ -38,10 +38,10 @@ migrate-clean-slate:
 	bash scripts/migrate.sh clean-slate
 
 docker-up:
-	docker-compose up -d postgres redis
+	docker compose up -d postgres redis
 
 docker-down:
-	docker-compose down
+	docker compose down
 
 run: build
 	./$(BINARY_NAME) --config config.yaml
