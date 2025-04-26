@@ -7,16 +7,13 @@ import (
 	"time"
 
 	"github.com/feedloop/qhronos/internal/models"
-	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 )
 
 const (
 	// Redis key for scheduled events
-	scheduleKey = "schedules"
-	// Redis key for recurring events
-	recurringKey = "recurring:events"
+	ScheduleKey = "schedules"
 	// Redis key for dispatch queue
 	dispatchQueueKey = "dispatch:queue"
 )
@@ -63,7 +60,7 @@ func (s *Scheduler) ScheduleEvent(ctx context.Context, occurrence *models.Occurr
 
 	// Add to Redis sorted set and hash
 	score := float64(occurrence.ScheduledAt.Unix())
-	_, err = s.redis.ZAdd(ctx, scheduleKey, redis.Z{
+	_, err = s.redis.ZAdd(ctx, ScheduleKey, redis.Z{
 		Score:  score,
 		Member: key,
 	}).Result()
@@ -75,23 +72,6 @@ func (s *Scheduler) ScheduleEvent(ctx context.Context, occurrence *models.Occurr
 		return fmt.Errorf("failed to add schedule to hash: %w", err)
 	}
 	return nil
-}
-
-// ScheduleRecurringEvent schedules a recurring event
-func (s *Scheduler) ScheduleRecurringEvent(ctx context.Context, event *models.Event) error {
-	if event.Schedule == nil {
-		return fmt.Errorf("event has no schedule")
-	}
-
-	// Convert event to JSON
-	data, err := json.Marshal(event)
-	if err != nil {
-		return fmt.Errorf("failed to marshal event: %w", err)
-	}
-
-	// Add to Redis hash for recurring events
-	_, err = s.redis.HSet(ctx, recurringKey, event.ID.String(), data).Result()
-	return err
 }
 
 // GetDueSchedules moves due schedules to the dispatch queue (idempotent version)
@@ -113,7 +93,7 @@ return count
 `
 
 	now := fmt.Sprintf("%d", time.Now().Unix())
-	res, err := s.redis.Eval(ctx, scheduleLua, []string{scheduleKey, "schedule:data", dispatchQueueKey}, now).Result()
+	res, err := s.redis.Eval(ctx, scheduleLua, []string{ScheduleKey, "schedule:data", dispatchQueueKey}, now).Result()
 	if err != nil {
 		return 0, fmt.Errorf("failed to atomically move due schedules: %w", err)
 	}
@@ -141,7 +121,7 @@ func (s *Scheduler) PopDispatchQueue(ctx context.Context) (*models.Schedule, err
 // RemoveScheduledEvent removes a scheduled event from Redis (idempotent version)
 func (s *Scheduler) RemoveScheduledEvent(ctx context.Context, occurrence *models.Occurrence) error {
 	key := fmt.Sprintf("schedule:%s:%d", occurrence.EventID.String(), occurrence.ScheduledAt.Unix())
-	_, err := s.redis.ZRem(ctx, scheduleKey, key).Result()
+	_, err := s.redis.ZRem(ctx, ScheduleKey, key).Result()
 	if err != nil {
 		return fmt.Errorf("failed to remove schedule from sorted set: %w", err)
 	}
@@ -150,31 +130,6 @@ func (s *Scheduler) RemoveScheduledEvent(ctx context.Context, occurrence *models
 		return fmt.Errorf("failed to remove schedule from hash: %w", err)
 	}
 	return nil
-}
-
-// GetRecurringEvents retrieves all recurring events
-func (s *Scheduler) GetRecurringEvents(ctx context.Context) ([]*models.Event, error) {
-	results, err := s.redis.HGetAll(ctx, recurringKey).Result()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get recurring events: %w", err)
-	}
-
-	var events []*models.Event
-	for _, result := range results {
-		var event models.Event
-		if err := json.Unmarshal([]byte(result), &event); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal event: %w", err)
-		}
-		events = append(events, &event)
-	}
-
-	return events, nil
-}
-
-// RemoveRecurringEvent removes a recurring event from Redis
-func (s *Scheduler) RemoveRecurringEvent(ctx context.Context, eventID uuid.UUID) error {
-	_, err := s.redis.HDel(ctx, recurringKey, eventID.String()).Result()
-	return err
 }
 
 func (s *Scheduler) AddEvent(ctx context.Context, event *models.Event) error {
@@ -201,7 +156,7 @@ func (s *Scheduler) AddEvent(ctx context.Context, event *models.Event) error {
 
 	// Store event in Redis sorted set with score as Unix timestamp
 	score := float64(nextTime.Unix())
-	err = s.redis.ZAdd(ctx, scheduleKey, redis.Z{
+	err = s.redis.ZAdd(ctx, ScheduleKey, redis.Z{
 		Score:  score,
 		Member: string(eventJSON),
 	}).Err()

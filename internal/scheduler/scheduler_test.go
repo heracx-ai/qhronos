@@ -157,48 +157,6 @@ func TestScheduler(t *testing.T) {
 		assert.Equal(t, 0, count)
 	})
 
-	t.Run("recurring event scheduling", func(t *testing.T) {
-		eventRepo, _, scheduler, _, t, _ := cleanup()
-		// Create recurring event
-		event := &models.Event{
-			ID:          uuid.New(),
-			Name:        "Recurring Event",
-			Description: "Test Description",
-			StartTime:   time.Now(),
-			Webhook:     "http://example.com",
-			Schedule: &models.ScheduleConfig{
-				Frequency: "daily",
-				Interval:  1,
-			},
-			Status:    models.EventStatusActive,
-			Metadata:  datatypes.JSON([]byte(`{"key": "value"}`)),
-			Tags:      pq.StringArray{"test"},
-			CreatedAt: time.Now(),
-		}
-
-		err := eventRepo.Create(context.Background(), event)
-		require.NoError(t, err)
-
-		// Schedule recurring event
-		err = scheduler.ScheduleRecurringEvent(context.Background(), event)
-		require.NoError(t, err)
-
-		// Get recurring events
-		events, err := scheduler.GetRecurringEvents(context.Background())
-		require.NoError(t, err)
-		assert.Len(t, events, 1)
-		assert.Equal(t, event.ID, events[0].ID)
-
-		// Remove recurring event
-		err = scheduler.RemoveRecurringEvent(context.Background(), event.ID)
-		require.NoError(t, err)
-
-		// Verify event was removed
-		events, err = scheduler.GetRecurringEvents(context.Background())
-		require.NoError(t, err)
-		assert.Empty(t, events)
-	})
-
 	t.Run("database and redis sync", func(t *testing.T) {
 		eventRepo, occurrenceRepo, scheduler, _, t, redisClient := cleanup()
 		ctx := context.Background()
@@ -249,7 +207,7 @@ func TestScheduler(t *testing.T) {
 		}
 
 		// Get all scheduled occurrences from Redis
-		results, err := redisClient.ZRange(ctx, scheduleKey, 0, -1).Result()
+		results, err := redisClient.ZRange(ctx, ScheduleKey, 0, -1).Result()
 		require.NoError(t, err)
 		assert.Len(t, results, len(occurrences))
 
@@ -325,7 +283,7 @@ func TestScheduler(t *testing.T) {
 		require.NoError(t, err)
 
 		// There should be only one schedule in Redis
-		keys, err := redisClient.ZRange(context.Background(), scheduleKey, 0, -1).Result()
+		keys, err := redisClient.ZRange(context.Background(), ScheduleKey, 0, -1).Result()
 		require.NoError(t, err)
 		assert.Len(t, keys, 1)
 	})

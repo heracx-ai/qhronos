@@ -81,7 +81,7 @@ func TestEventExpander(t *testing.T) {
 		require.NoError(t, err)
 
 		// Get all events from Redis sorted set
-		results, err := redisClient.ZRange(ctx, scheduleKey, 0, -1).Result()
+		results, err := redisClient.ZRange(ctx, ScheduleKey, 0, -1).Result()
 		require.NoError(t, err)
 		assert.NotEmpty(t, results)
 
@@ -101,7 +101,7 @@ func TestEventExpander(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify no occurrences were created
-		results, err := redisClient.ZRange(ctx, scheduleKey, 0, -1).Result()
+		results, err := redisClient.ZRange(ctx, ScheduleKey, 0, -1).Result()
 		require.NoError(t, err)
 		assert.Empty(t, results)
 	})
@@ -130,7 +130,7 @@ func TestEventExpander(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify one occurrence was created in Redis
-		results, err := redisClient.ZRange(ctx, scheduleKey, 0, -1).Result()
+		results, err := redisClient.ZRange(ctx, ScheduleKey, 0, -1).Result()
 		require.NoError(t, err)
 		assert.Len(t, results, 1)
 
@@ -168,7 +168,7 @@ func TestEventExpander(t *testing.T) {
 		require.NoError(t, err)
 
 		// Get all occurrences from Redis sorted set
-		results, err := redisClient.ZRange(ctx, scheduleKey, 0, -1).Result()
+		results, err := redisClient.ZRange(ctx, ScheduleKey, 0, -1).Result()
 		require.NoError(t, err)
 		assert.Len(t, results, 1)
 
@@ -180,5 +180,65 @@ func TestEventExpander(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, event.ID, occurrence.EventID)
 		assert.Equal(t, startTime.Unix(), occurrence.ScheduledAt.Unix())
+	})
+
+	t.Run("weekly_lookahead", func(t *testing.T) {
+		cleanup()
+		// Fixed time for deterministic test
+		fixedNow := time.Date(2024, 5, 30, 10, 0, 0, 0, time.UTC) // Thursday
+		lookAheadDuration := 14 * 24 * time.Hour                  // 2 weeks
+		gracePeriod := 2 * time.Minute
+		expansionInterval := 5 * time.Minute
+
+		eventStart := fixedNow.AddDate(0, 0, -28) // 4 weeks ago (Thursday)
+		scheduleConfig := &models.ScheduleConfig{
+			Frequency: "weekly",
+			Interval:  1,
+			ByDay:     []string{"MO"}, // Every Monday
+		}
+		event := &models.Event{
+			ID:          uuid.New(),
+			Name:        "Weekly Event",
+			Description: "Weekly event starting 4 weeks ago",
+			StartTime:   eventStart,
+			Webhook:     "http://example.com",
+			Schedule:    scheduleConfig,
+			Status:      models.EventStatusActive,
+			Metadata:    []byte(`{"key": "value"}`),
+			Tags:        pq.StringArray{"test"},
+			CreatedAt:   eventStart,
+		}
+		err := eventRepo.Create(ctx, event)
+		require.NoError(t, err)
+
+		// Patch time.Now to return fixedNow
+		oldNow := TimeNow
+		TimeNow = func() time.Time { return fixedNow }
+		defer func() { TimeNow = oldNow }()
+
+		expander := NewExpander(scheduler, eventRepo, occurrenceRepo, lookAheadDuration, expansionInterval, gracePeriod, logger)
+		err = expander.ExpandEvents(ctx)
+		require.NoError(t, err)
+
+		// Get all scheduled occurrences from Redis
+		results, err := redisClient.ZRange(ctx, ScheduleKey, 0, -1).Result()
+		require.NoError(t, err)
+		var scheduledMondays []time.Time
+		for _, key := range results {
+			data, err := redisClient.HGet(ctx, "schedule:data", key).Result()
+			require.NoError(t, err)
+			var sched models.Schedule
+			err = json.Unmarshal([]byte(data), &sched)
+			require.NoError(t, err)
+			if sched.EventID == event.ID && sched.ScheduledAt.Weekday() == time.Monday {
+				scheduledMondays = append(scheduledMondays, sched.ScheduledAt)
+			}
+		}
+		// Calculate expected Mondays in lookahead window
+		expectedMondays := []time.Time{
+			time.Date(2024, 6, 3, 10, 0, 0, 0, time.UTC),
+			time.Date(2024, 6, 10, 10, 0, 0, 0, time.UTC),
+		}
+		assert.Equal(t, expectedMondays, scheduledMondays)
 	})
 }

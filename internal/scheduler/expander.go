@@ -11,6 +11,8 @@ import (
 	"go.uber.org/zap"
 )
 
+var TimeNow = func() time.Time { return time.Now() }
+
 type Expander struct {
 	scheduler         *Scheduler
 	eventRepo         *repository.EventRepository
@@ -118,7 +120,7 @@ func (e *Expander) expandRecurringEvent(ctx context.Context, event *models.Event
 	e.logger.Debug("Expanding recurring event", zap.String("event_id", event.ID.String()))
 
 	// Get next occurrences based on schedule configuration
-	now := time.Now().UTC()
+	now := TimeNow().UTC()
 	graceStart := now.Add(-e.gracePeriod)
 	endTime := now.Add(e.lookAheadDuration)
 	startTime := event.StartTime.UTC()
@@ -242,7 +244,7 @@ func (e *Expander) expandNonRecurringEvent(ctx context.Context, event *models.Ev
 		e.logger.Warn("Non-recurring event has a non-nil schedule; ignoring schedule", zap.String("event_id", event.ID.String()))
 	}
 
-	now := time.Now().UTC()
+	now := TimeNow().UTC()
 	graceStart := now.Add(-e.gracePeriod)
 	startTime := event.StartTime.UTC()
 

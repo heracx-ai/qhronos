@@ -169,9 +169,6 @@ func (r *EventRepository) Delete(ctx context.Context, id uuid.UUID) error {
 		r.logger.Warn("Failed to remove event occurrences from Redis", zap.String("event_id", id.String()), zap.Error(err))
 	}
 
-	// Remove recurring event from Redis (if present)
-	_ = r.redis.HDel(ctx, "recurring:events", id.String()).Err()
-
 	return nil
 }
 
