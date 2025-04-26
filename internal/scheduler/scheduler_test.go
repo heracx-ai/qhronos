@@ -3,6 +3,8 @@ package scheduler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -422,4 +424,130 @@ func TestScheduler(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, items, 0)
 	})
+}
+
+func TestScheduler_AtomicGetDueSchedules_NoDuplicates(t *testing.T) {
+	ctx := context.Background()
+	redisClient := testutils.TestRedis(t)
+	redisClient.FlushAll(ctx)
+	scheduler := NewScheduler(redisClient, zap.NewNop())
+
+	// Schedule 10 events due now
+	now := time.Now()
+	for i := 0; i < 10; i++ {
+		occ := &models.Occurrence{
+			OccurrenceID: uuid.New(),
+			EventID:      uuid.New(),
+			ScheduledAt:  now,
+			Status:       models.OccurrenceStatusPending,
+			Timestamp:    now,
+		}
+		event := &models.Event{
+			ID:        occ.EventID,
+			Name:      fmt.Sprintf("Event %d", i),
+			StartTime: now,
+			Webhook:   "http://example.com",
+			Status:    models.EventStatusActive,
+			Metadata:  []byte(`{}`),
+			Tags:      []string{"test"},
+			CreatedAt: now,
+		}
+		err := scheduler.ScheduleEvent(ctx, occ, event)
+		require.NoError(t, err)
+	}
+
+	// Simulate multiple pollers
+	var wg sync.WaitGroup
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := scheduler.GetDueSchedules(ctx)
+			require.NoError(t, err)
+		}()
+	}
+	wg.Wait()
+
+	// Check that dispatch queue has exactly 10 unique items
+	items, err := redisClient.LRange(ctx, dispatchQueueKey, 0, -1).Result()
+	require.NoError(t, err)
+	assert.Len(t, items, 10)
+
+	// Check for duplicates
+	seen := make(map[string]bool)
+	for _, item := range items {
+		if seen[item] {
+			t.Errorf("Duplicate item found in dispatch queue: %s", item)
+		}
+		seen[item] = true
+	}
+}
+
+func TestScheduler_AtomicRetryPoller_NoDuplicates(t *testing.T) {
+	ctx := context.Background()
+	redisClient := testutils.TestRedis(t)
+	redisClient.FlushAll(ctx)
+	// scheduler := NewScheduler(redisClient, zap.NewNop()) // Remove unused variable
+
+	// Simulate a failed event that needs retry
+	now := time.Now()
+	occ := &models.Occurrence{
+		OccurrenceID: uuid.New(),
+		EventID:      uuid.New(),
+		ScheduledAt:  now,
+		Status:       models.OccurrenceStatusPending,
+		Timestamp:    now,
+		AttemptCount: 1,
+	}
+	event := &models.Event{
+		ID:        occ.EventID,
+		Name:      "Retry Event",
+		StartTime: now,
+		Webhook:   "http://example.com",
+		Status:    models.EventStatusActive,
+		Metadata:  []byte(`{}`),
+		Tags:      []string{"test"},
+		CreatedAt: now,
+	}
+	sched := models.Schedule{
+		Occurrence: *occ,
+		Name:       event.Name,
+		Webhook:    event.Webhook,
+		Metadata:   event.Metadata,
+		Tags:       event.Tags,
+	}
+	data, err := json.Marshal(sched)
+	require.NoError(t, err)
+	// Add to retry queue, due now
+	_, err = redisClient.ZAdd(ctx, retryQueueKey, redis.Z{
+		Score:  float64(now.Unix()),
+		Member: data,
+	}).Result()
+	require.NoError(t, err)
+
+	// Simulate multiple retry pollers (using the Lua script)
+	retryLua := `
+local due = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
+for i, v in ipairs(due) do
+  redis.call('RPUSH', KEYS[2], v)
+  redis.call('ZREM', KEYS[1], v)
+end
+return due
+`
+	var wg sync.WaitGroup
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			nowStr := fmt.Sprintf("%f", float64(now.Unix()))
+			_, err := redisClient.Eval(ctx, retryLua, []string{retryQueueKey, dispatchQueueKey}, nowStr).Result()
+			require.NoError(t, err)
+		}()
+	}
+	wg.Wait()
+
+	// Check that dispatch queue has exactly 1 item, no duplicates
+	items, err := redisClient.LRange(ctx, dispatchQueueKey, 0, -1).Result()
+	require.NoError(t, err)
+	assert.Len(t, items, 1)
 }

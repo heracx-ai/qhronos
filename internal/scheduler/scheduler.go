@@ -96,44 +96,31 @@ func (s *Scheduler) ScheduleRecurringEvent(ctx context.Context, event *models.Ev
 
 // GetDueSchedules moves due schedules to the dispatch queue (idempotent version)
 func (s *Scheduler) GetDueSchedules(ctx context.Context) (int, error) {
-	now := time.Now().Unix()
+	// Lua script for atomic move from schedule set/hash to dispatch queue
+	scheduleLua := `
+local keys = redis.call('ZRANGEBYSCORE', KEYS[1], '0', ARGV[1])
+local count = 0
+for i, key in ipairs(keys) do
+  local data = redis.call('HGET', KEYS[2], key)
+  if data then
+    redis.call('RPUSH', KEYS[3], data)
+    redis.call('ZREM', KEYS[1], key)
+    redis.call('HDEL', KEYS[2], key)
+    count = count + 1
+  end
+end
+return count
+`
 
-	// Get all due schedule keys
-	keys, err := s.redis.ZRangeByScore(ctx, scheduleKey, &redis.ZRangeBy{
-		Min: "0",
-		Max: fmt.Sprintf("%d", now),
-	}).Result()
+	now := fmt.Sprintf("%d", time.Now().Unix())
+	res, err := s.redis.Eval(ctx, scheduleLua, []string{scheduleKey, "schedule:data", dispatchQueueKey}, now).Result()
 	if err != nil {
-		return 0, fmt.Errorf("failed to get due schedules from Redis: %w", err)
+		return 0, fmt.Errorf("failed to atomically move due schedules: %w", err)
 	}
-
-	count := 0
-	for _, key := range keys {
-		// Fetch schedule JSON from hash
-		data, err := s.redis.HGet(ctx, "schedule:data", key).Result()
-		if err == redis.Nil {
-			continue // No data, skip
-		} else if err != nil {
-			return count, fmt.Errorf("failed to get schedule data from hash: %w", err)
-		}
-
-		// Push to dispatch queue
-		err = s.redis.RPush(ctx, dispatchQueueKey, data).Err()
-		if err != nil {
-			return count, fmt.Errorf("failed to push schedule to dispatch queue: %w", err)
-		}
-		count++
-
-		// Remove from both sorted set and hash after processing
-		if err := s.redis.ZRem(ctx, scheduleKey, key).Err(); err != nil {
-			return count, fmt.Errorf("failed to remove processed schedule from sorted set: %w", err)
-		}
-		if err := s.redis.HDel(ctx, "schedule:data", key).Err(); err != nil {
-			return count, fmt.Errorf("failed to remove processed schedule from hash: %w", err)
-		}
+	if n, ok := res.(int64); ok {
+		return int(n), nil
 	}
-
-	return count, nil
+	return 0, nil
 }
 
 // PopDispatchQueue pops a schedule from the dispatch queue (for worker use)

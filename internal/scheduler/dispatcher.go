@@ -68,26 +68,7 @@ func (d *Dispatcher) SetHTTPClient(client HTTPClient) {
 	d.client = client
 }
 
-// retryWithBackoff executes a function with retries and backoff
-func (d *Dispatcher) retryWithBackoff(ctx context.Context, operation func() error) error {
-	var lastErr error
-	for attempt := 0; attempt <= d.maxRetries; attempt++ {
-		err := operation()
-		if err == nil {
-			return nil
-		}
-
-		lastErr = err
-		if attempt == d.maxRetries {
-			return lastErr
-		}
-
-		time.Sleep(d.retryDelay)
-	}
-	return lastErr
-}
-
-// DispatchWebhook sends a webhook request and handles retries using a Schedule object
+// DispatchWebhook sends a webhook request and handles a single attempt (no in-process retry)
 func (d *Dispatcher) DispatchWebhook(ctx context.Context, sched *models.Schedule) error {
 	if strings.HasPrefix(sched.Webhook, "q:") {
 		if d.clientNotifier == nil {
@@ -106,14 +87,9 @@ func (d *Dispatcher) DispatchWebhook(ctx context.Context, sched *models.Schedule
 		if err != nil {
 			return fmt.Errorf("error marshaling payload: %w", err)
 		}
-		var dispatchErr error
-		dispatchErr = d.retryWithBackoff(ctx, func() error {
-			return d.clientNotifier.DispatchToClient(clientID, jsonPayload)
-		})
-		// Log occurrence as before (reuse code)
-		// ... (copy occurrence logging from HTTP path, set status based on dispatchErr) ...
+		err = d.clientNotifier.DispatchToClient(clientID, jsonPayload)
 		finalStatus := models.OccurrenceStatusCompleted
-		if dispatchErr != nil {
+		if err != nil {
 			finalStatus = models.OccurrenceStatusFailed
 		}
 		logOccurrence := &models.Occurrence{
@@ -121,14 +97,14 @@ func (d *Dispatcher) DispatchWebhook(ctx context.Context, sched *models.Schedule
 			EventID:      sched.EventID,
 			ScheduledAt:  sched.ScheduledAt,
 			Status:       finalStatus,
-			AttemptCount: 1, // or track attempts if needed
+			AttemptCount: sched.AttemptCount,
 			Timestamp:    time.Now(),
 			StatusCode:   0,
 			ResponseBody: "",
-			ErrorMessage: fmt.Sprintf("client hook dispatch: %v", dispatchErr),
+			ErrorMessage: fmt.Sprintf("client hook dispatch: %v", err),
 		}
 		_ = d.occurrenceRepo.Create(ctx, logOccurrence)
-		return dispatchErr
+		return err
 	}
 	// Prepare webhook payload with rich information
 	payload := map[string]interface{}{
@@ -139,102 +115,74 @@ func (d *Dispatcher) DispatchWebhook(ctx context.Context, sched *models.Schedule
 		"scheduled_at":  sched.ScheduledAt,
 		"metadata":      sched.Metadata,
 	}
-
-	// Convert payload to JSON
 	jsonPayload, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("error marshaling payload: %w", err)
 	}
-
-	// Create base request (will be cloned for each attempt)
 	baseReq, err := http.NewRequestWithContext(ctx, "POST", sched.Webhook, nil)
 	if err != nil {
 		return fmt.Errorf("error creating request: %w", err)
 	}
-
-	// Set headers
 	baseReq.Header.Set("Content-Type", "application/json")
 	baseReq.Header.Set("Content-Length", fmt.Sprintf("%d", len(jsonPayload)))
-
-	// Sign request if HMAC is enabled (not supported if secret is not present)
 	if d.hmacService != nil {
-		// No HMACSecret in Schedule, so skip or use default
 		secret := ""
 		signature := d.hmacService.SignPayload(jsonPayload, secret)
 		baseReq.Header.Set("X-Qhronos-Signature", signature)
 	}
-
-	// Track attempts
-	attemptCount := 0
-	var lastAttempt time.Time
+	// Only one attempt per call
+	attemptCount := sched.AttemptCount
+	if attemptCount == 0 {
+		attemptCount = 1
+	} else {
+		attemptCount++
+	}
+	req := baseReq.Clone(ctx)
+	req.Body = ioutil.NopCloser(bytes.NewBuffer(jsonPayload))
 	var finalStatus models.OccurrenceStatus
 	var statusCode int
 	var responseBody string
 	var errorMessage string
-
-	// Execute webhook request with retries
-	dispatchErr := d.retryWithBackoff(ctx, func() error {
-		attemptCount++
-		lastAttempt = time.Now()
-		// Clone the base request and set the body for this attempt
-		req := baseReq.Clone(ctx)
-		req.Body = ioutil.NopCloser(bytes.NewBuffer(jsonPayload))
-
-		resp, err := d.client.Do(req)
-		if err != nil {
-			finalStatus = models.OccurrenceStatusFailed
-			statusCode = 0
-			responseBody = ""
-			errorMessage = err.Error()
-			return fmt.Errorf("webhook request failed: %w", err)
-		}
-
-		// Handle nil response
-		if resp == nil {
-			finalStatus = models.OccurrenceStatusFailed
-			statusCode = 0
-			responseBody = ""
-			errorMessage = "empty response from server"
-			return fmt.Errorf("empty response from server")
-		}
-
-		// Ensure response body is closed
+	resp, err := d.client.Do(req)
+	if err != nil {
+		finalStatus = models.OccurrenceStatusFailed
+		statusCode = 0
+		responseBody = ""
+		errorMessage = err.Error()
+	} else if resp == nil {
+		finalStatus = models.OccurrenceStatusFailed
+		statusCode = 0
+		responseBody = ""
+		errorMessage = "empty response from server"
+	} else {
 		defer func() {
 			if resp.Body != nil {
 				resp.Body.Close()
 			}
 		}()
-
-		// Check response status
 		statusCode = resp.StatusCode
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			finalStatus = models.OccurrenceStatusCompleted
 			responseBody = ""
 			errorMessage = ""
-			return nil
+		} else {
+			finalStatus = models.OccurrenceStatusFailed
+			responseBody = ""
+			errorMessage = fmt.Sprintf("received non-2xx status code: %d", resp.StatusCode)
 		}
-
-		// Non-2xx status code
-		finalStatus = models.OccurrenceStatusFailed
-		responseBody = ""
-		errorMessage = fmt.Sprintf("received non-2xx status code: %d", resp.StatusCode)
-		return fmt.Errorf("received non-2xx status code: %d", resp.StatusCode)
-	})
-
-	// Log the result to Postgres as a new occurrence record (append-only, for history)
+	}
 	logOccurrence := &models.Occurrence{
 		OccurrenceID: sched.OccurrenceID,
 		EventID:      sched.EventID,
 		ScheduledAt:  sched.ScheduledAt,
 		Status:       finalStatus,
 		AttemptCount: attemptCount,
-		Timestamp:    lastAttempt,
+		Timestamp:    time.Now(),
 		StatusCode:   statusCode,
 		ResponseBody: responseBody,
 		ErrorMessage: errorMessage,
 	}
-	_ = d.occurrenceRepo.Create(ctx, logOccurrence) // Ignore error to avoid blocking delivery
-
+	_ = d.occurrenceRepo.Create(ctx, logOccurrence)
 	// Auto-inactivate one-time events after dispatch (success or max retries)
 	event, err := d.eventRepo.GetByID(ctx, sched.EventID)
 	if event == nil {
@@ -244,39 +192,82 @@ func (d *Dispatcher) DispatchWebhook(ctx context.Context, sched *models.Schedule
 		event.Status = "inactive"
 		_ = d.eventRepo.Update(ctx, event)
 	}
-
-	return dispatchErr
+	if finalStatus == models.OccurrenceStatusCompleted {
+		return nil
+	}
+	return fmt.Errorf("dispatch failed: %s", errorMessage)
 }
 
-const dispatchProcessingKey = "dispatch:processing"
+const retryQueueKey = "retry:queue"
 
 // Run starts a pool of dispatcher workers that process the dispatch queue
 func (d *Dispatcher) Run(ctx context.Context, scheduler *Scheduler, workerCount int) error {
 	d.logger.Info("Starting dispatcher worker pool", zap.Int("worker_count", workerCount))
+
+	// Lua script for atomic move from retry queue to dispatch queue
+	retryLua := `
+local due = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
+for i, v in ipairs(due) do
+  redis.call('RPUSH', KEYS[2], v)
+  redis.call('ZREM', KEYS[1], v)
+end
+return due
+`
+
+	// Start retry poller
+	pollerCtx, pollerCancel := context.WithCancel(context.Background())
+	go func() {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-pollerCtx.Done():
+				return
+			case <-ticker.C:
+				now := fmt.Sprintf("%f", float64(time.Now().Unix()))
+				// Use Lua script for atomic move
+				res, err := scheduler.redis.Eval(ctx, retryLua, []string{retryQueueKey, dispatchQueueKey}, now).Result()
+				if err != nil {
+					d.logger.Error("[RETRY POLLER] Lua script failed", zap.Error(err))
+					continue
+				}
+				if arr, ok := res.([]interface{}); ok && len(arr) > 0 {
+					d.logger.Debug("[RETRY POLLER] Moved items from retry queue to dispatch queue", zap.Int("count", len(arr)))
+				}
+			}
+		}
+	}()
+
 	workerFn := func(workerID int) {
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			default:
-				d.logger.Debug("[DISPATCHER] Worker waiting for item", zap.Int("worker_id", workerID))
-				// Atomically move from queue to processing
-				data, err := scheduler.redis.BRPopLPush(ctx, dispatchQueueKey, dispatchProcessingKey, 5*time.Second).Result()
+				itemStart := time.Now()
+				d.logger.Debug("[DISPATCHER] Worker waiting for item", zap.Int("worker_id", workerID), zap.Time("ts", itemStart))
+				// Pop from dispatch queue (no processing queue)
+				popStart := time.Now()
+				data, err := scheduler.redis.BRPop(ctx, 5*time.Second, dispatchQueueKey).Result()
+				popEnd := time.Now()
+				d.logger.Debug("[DISPATCHER] BRPop duration", zap.Int("worker_id", workerID), zap.Duration("duration", popEnd.Sub(popStart)), zap.Error(err))
 				if err == redis.Nil {
-					d.logger.Debug("[DISPATCHER] No item found, continuing", zap.Int("worker_id", workerID))
+					d.logger.Debug("[DISPATCHER] No item found, continuing", zap.Int("worker_id", workerID), zap.Time("ts", time.Now()))
 					continue // No item, keep waiting
 				} else if err != nil {
-					d.logger.Error("Worker failed to BRPOPLPUSH", zap.Int("worker_id", workerID), zap.Error(err))
+					d.logger.Error("Worker failed to BRPOP", zap.Int("worker_id", workerID), zap.Error(err))
 					continue
 				}
-				d.logger.Debug("[DISPATCHER] Worker got item from queue", zap.Int("worker_id", workerID), zap.String("data", data))
+				// BRPop returns [queue, value]
+				item := data[1]
+				unmarshalStart := time.Now()
 				var sched models.Schedule
-				if err := json.Unmarshal([]byte(data), &sched); err != nil {
-					d.logger.Error("Worker failed to unmarshal schedule", zap.Int("worker_id", workerID), zap.Error(err), zap.String("data", data))
-					// Remove the bad item from processing
-					_ = scheduler.redis.LRem(ctx, dispatchProcessingKey, 1, data).Err()
+				if err := json.Unmarshal([]byte(item), &sched); err != nil {
+					d.logger.Error("Worker failed to unmarshal schedule", zap.Int("worker_id", workerID), zap.Error(err), zap.String("data", item))
 					continue
 				}
+				unmarshalEnd := time.Now()
+				d.logger.Debug("[DISPATCHER] Unmarshal duration", zap.Int("worker_id", workerID), zap.Duration("duration", unmarshalEnd.Sub(unmarshalStart)))
 				d.logger.Debug("[DISPATCHER] Worker unmarshalled schedule", zap.Int("worker_id", workerID), zap.Any("schedule", sched))
 				d.logger.Debug("[DISPATCHER] Worker dispatching webhook", zap.Int("worker_id", workerID), zap.String("occurrence_id", sched.OccurrenceID.String()))
 
@@ -287,48 +278,39 @@ func (d *Dispatcher) Run(ctx context.Context, scheduler *Scheduler, workerCount 
 					sched.AttemptCount++
 				}
 
-				// Attempt dispatch
+				dispatchStart := time.Now()
 				err = d.DispatchWebhook(ctx, &sched)
+				dispatchEnd := time.Now()
+				d.logger.Debug("[DISPATCHER] DispatchWebhook duration", zap.Int("worker_id", workerID), zap.Duration("duration", dispatchEnd.Sub(dispatchStart)), zap.Error(err))
+
 				if err != nil {
 					d.logger.Error("Worker failed to dispatch webhook", zap.Int("worker_id", workerID), zap.String("occurrence_id", sched.OccurrenceID.String()), zap.Error(err), zap.Int("attempt_count", sched.AttemptCount))
-					// Always log failed occurrence (already done in DispatchWebhook)
 					if sched.AttemptCount >= d.maxRetries {
-						// Remove from processing queue, do not push to dead letter queue
-						queueBefore, _ := scheduler.redis.LRange(ctx, dispatchProcessingKey, 0, -1).Result()
-						d.logger.Debug("[DISPATCHER] Max retries exceeded, removing from processing queue", zap.Int("worker_id", workerID), zap.Any("queue", queueBefore), zap.String("removing", data))
-						// Debug: print the data string and all items in the queue for comparison
-						d.logger.Debug("[DEBUG] LRem target data", zap.String("data", data))
-						for idx, item := range queueBefore {
-							d.logger.Debug("[DEBUG] Queue item", zap.Int("index", idx), zap.String("item", item))
-						}
-						// Use non-cancellable context for removal
-						_ = scheduler.redis.LRem(context.Background(), dispatchProcessingKey, 1, data).Err()
-						queueAfter, _ := scheduler.redis.LRange(ctx, dispatchProcessingKey, 0, -1).Result()
-						d.logger.Debug("[DISPATCHER] Processing queue after LRem (max retries)", zap.Int("worker_id", workerID), zap.Any("queue", queueAfter))
+						d.logger.Debug("[DISPATCHER] Max retries exceeded, dropping item", zap.Int("worker_id", workerID), zap.Any("schedule", sched))
+						// No further action needed, item is dropped
 					} else {
-						// Debug: log queue state before LSet
-						queueBeforeLSet, _ := scheduler.redis.LRange(ctx, dispatchProcessingKey, 0, -1).Result()
-						d.logger.Debug("[DISPATCHER] Processing queue before LSet (increment attempt count)", zap.Int("worker_id", workerID), zap.Any("queue", queueBeforeLSet))
-						// Update the item in the processing queue with incremented attempt count
+						zaddStart := time.Now()
+						nextRetry := time.Now().Add(d.retryDelay).Unix()
 						updatedData, _ := json.Marshal(sched)
-						lsetErr := scheduler.redis.LSet(ctx, dispatchProcessingKey, 0, updatedData).Err() // LSet index 0: most recent item
-						if lsetErr != nil {
-							d.logger.Error("[DISPATCHER] LSet failed when incrementing attempt count", zap.Int("worker_id", workerID), zap.Error(lsetErr))
+						d.logger.Debug("[DISPATCHER] Before ZAdd to retry queue", zap.Int("worker_id", workerID), zap.Time("ts", zaddStart))
+						err := scheduler.redis.ZAdd(ctx, retryQueueKey, redis.Z{
+							Score:  float64(nextRetry),
+							Member: updatedData,
+						}).Err()
+						zaddEnd := time.Now()
+						d.logger.Debug("[DISPATCHER] After ZAdd to retry queue", zap.Int("worker_id", workerID), zap.Time("ts", zaddEnd), zap.Duration("duration", zaddEnd.Sub(zaddStart)), zap.Error(err))
+						if err != nil {
+							d.logger.Error("[DISPATCHER] Failed to add to retry queue", zap.Int("worker_id", workerID), zap.Error(err))
 						}
-						// Debug: log queue state after LSet
-						queueAfterLSet, _ := scheduler.redis.LRange(ctx, dispatchProcessingKey, 0, -1).Result()
-						d.logger.Debug("[DISPATCHER] Processing queue after LSet (increment attempt count)", zap.Int("worker_id", workerID), zap.Any("queue", queueAfterLSet))
+						d.logger.Debug("[DISPATCHER] Item moved to retry queue", zap.Int("worker_id", workerID), zap.Any("schedule", sched), zap.Int64("next_retry", nextRetry))
 					}
+					itemEnd := time.Now()
+					d.logger.Debug("[DISPATCHER] Total time for item", zap.Int("worker_id", workerID), zap.Duration("duration", itemEnd.Sub(itemStart)))
 					continue
 				}
 				d.logger.Debug("[DISPATCHER] Worker successfully dispatched webhook", zap.Int("worker_id", workerID), zap.String("occurrence_id", sched.OccurrenceID.String()))
-				// On success, remove from processing queue using the exact value popped (raw JSON string)
-				queueBefore, _ := scheduler.redis.LRange(ctx, dispatchProcessingKey, 0, -1).Result()
-				d.logger.Debug("[DISPATCHER] Processing queue before LRem", zap.Int("worker_id", workerID), zap.Any("queue", queueBefore), zap.String("removing", data))
-				// Use non-cancellable context for removal
-				_ = scheduler.redis.LRem(context.Background(), dispatchProcessingKey, 1, data).Err()
-				queueAfter, _ := scheduler.redis.LRange(ctx, dispatchProcessingKey, 0, -1).Result()
-				d.logger.Debug("[DISPATCHER] Processing queue after LRem", zap.Int("worker_id", workerID), zap.Any("queue", queueAfter))
+				itemEnd := time.Now()
+				d.logger.Debug("[DISPATCHER] Total time for item", zap.Int("worker_id", workerID), zap.Duration("duration", itemEnd.Sub(itemStart)))
 			}
 		}
 	}
@@ -336,6 +318,7 @@ func (d *Dispatcher) Run(ctx context.Context, scheduler *Scheduler, workerCount 
 		go workerFn(i)
 	}
 	<-ctx.Done()
+	pollerCancel()
 	d.logger.Info("Dispatcher worker pool shutting down")
 	return ctx.Err()
 }

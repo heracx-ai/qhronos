@@ -149,8 +149,11 @@ func TestDispatcher(t *testing.T) {
 	})
 
 	t.Run("event not found", func(t *testing.T) {
+		start := time.Now()
+		cleanupStart := time.Now()
 		cleanup()
-		// Create schedule with non-existent event
+		fmt.Printf("[PROFILE] cleanup: %v\n", time.Since(cleanupStart))
+		scheduleStart := time.Now()
 		schedule := &models.Schedule{
 			Occurrence: models.Occurrence{
 				OccurrenceID: uuid.New(),
@@ -163,17 +166,18 @@ func TestDispatcher(t *testing.T) {
 			Metadata:    []byte(`{"key": "value"}`),
 			Tags:        pq.StringArray{"test"},
 		}
-
+		fmt.Printf("[PROFILE] schedule creation: %v\n", time.Since(scheduleStart))
 		// Setup expectations for HTTP call (even if event not found, dispatcher may attempt HTTP call)
 		mockHTTP.On("Do", mock.AnythingOfType("*http.Request")).Return((*http.Response)(nil), errors.New("event not found"))
-
-		// Run dispatch
+		callStart := time.Now()
 		err := dispatcher.DispatchWebhook(ctx, schedule)
-
-		// Verify
+		fmt.Printf("[PROFILE] DispatchWebhook call: %v\n", time.Since(callStart))
 		assert.Error(t, err)
+		assertionStart := time.Now()
 		assert.Contains(t, err.Error(), "event not found")
 		mockHTTP.AssertExpectations(t)
+		fmt.Printf("[PROFILE] final assertion: %v\n", time.Since(assertionStart))
+		fmt.Printf("[PROFILE] total test duration: %v\n", time.Since(start))
 	})
 
 	t.Run("webhook request failure", func(t *testing.T) {
@@ -229,7 +233,7 @@ func TestDispatcher(t *testing.T) {
 
 		// Verify
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "webhook request failed")
+		assert.Contains(t, err.Error(), "dispatch failed")
 		mockHTTP.AssertExpectations(t)
 
 		// Verify schedule status
@@ -240,11 +244,16 @@ func TestDispatcher(t *testing.T) {
 
 	// Add client hook tests
 	t.Run("client hook dispatch - single client", func(t *testing.T) {
+		start := time.Now()
+		cleanupStart := time.Now()
 		cleanup()
+		fmt.Printf("[PROFILE] cleanup: %v\n", time.Since(cleanupStart))
+		dispatcherStart := time.Now()
 		mockNotifier := NewMockClientNotifier()
 		mockNotifier.connected["client1"] = []string{"c1"}
 		dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, mockNotifier)
-		// Create schedule with q: webhook
+		fmt.Printf("[PROFILE] dispatcher creation: %v\n", time.Since(dispatcherStart))
+		scheduleStart := time.Now()
 		schedule := &models.Schedule{
 			Occurrence: models.Occurrence{
 				OccurrenceID: uuid.New(),
@@ -257,38 +266,68 @@ func TestDispatcher(t *testing.T) {
 			Metadata:    []byte(`{"key": "value"}`),
 			Tags:        pq.StringArray{"test"},
 		}
+		fmt.Printf("[PROFILE] schedule creation: %v\n", time.Since(scheduleStart))
+		callStart := time.Now()
 		err := dispatcher.DispatchWebhook(ctx, schedule)
+		fmt.Printf("[PROFILE] DispatchWebhook call: %v\n", time.Since(callStart))
 		assert.NoError(t, err)
+		assertionStart := time.Now()
 		assert.Equal(t, []string{"client1:c1"}, mockNotifier.calls)
+		fmt.Printf("[PROFILE] final assertion: %v\n", time.Since(assertionStart))
+		fmt.Printf("[PROFILE] total test duration: %v\n", time.Since(start))
 	})
 
 	t.Run("client hook dispatch - no client connected", func(t *testing.T) {
 		cleanup()
 		mockNotifier := NewMockClientNotifier()
-		dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 2, 10*time.Millisecond, mockNotifier)
+		dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 2, 1*time.Millisecond, mockNotifier)
+		// Insert the event into the database
+		event := &models.Event{
+			ID:          uuid.New(),
+			Name:        "Client Hook Event",
+			Description: "Test client hook",
+			StartTime:   time.Now(),
+			Webhook:     "q:client2",
+			Status:      models.EventStatusActive,
+			Metadata:    []byte(`{"key": "value"}`),
+			Tags:        pq.StringArray{"test"},
+			CreatedAt:   time.Now(),
+		}
+		err := eventRepo.Create(ctx, event)
+		require.NoError(t, err)
 		schedule := &models.Schedule{
 			Occurrence: models.Occurrence{
 				OccurrenceID: uuid.New(),
-				EventID:      uuid.New(),
+				EventID:      event.ID,
 				ScheduledAt:  time.Now(),
 			},
-			Name:        "Client Hook Event",
-			Description: "Test client hook",
-			Webhook:     "q:client2",
-			Metadata:    []byte(`{"key": "value"}`),
-			Tags:        pq.StringArray{"test"},
+			Name:        event.Name,
+			Description: event.Description,
+			Webhook:     event.Webhook,
+			Metadata:    event.Metadata,
+			Tags:        event.Tags,
 		}
-		err := dispatcher.DispatchWebhook(ctx, schedule)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "no client connected")
+		data, err := json.Marshal(schedule)
+		require.NoError(t, err)
+		err = redisClient.RPush(ctx, dispatchQueueKey, data).Err()
+		require.NoError(t, err)
+		// Run the worker for a short time to process retries
+		runWorkerAndWait(ctx, dispatcher, NewScheduler(redisClient, logger), 20*time.Millisecond)
+		// Now assert the number of calls
 		assert.Equal(t, 3, len(mockNotifier.calls)) // 3 attempts (initial + 2 retries)
 	})
 
 	t.Run("client hook dispatch - round robin", func(t *testing.T) {
+		start := time.Now()
+		cleanupStart := time.Now()
 		cleanup()
+		fmt.Printf("[PROFILE] cleanup: %v\n", time.Since(cleanupStart))
+		dispatcherStart := time.Now()
 		mockNotifier := NewMockClientNotifier()
 		mockNotifier.connected["client3"] = []string{"c1", "c2"}
 		dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Millisecond, mockNotifier)
+		fmt.Printf("[PROFILE] dispatcher creation: %v\n", time.Since(dispatcherStart))
+		scheduleStart := time.Now()
 		schedule := &models.Schedule{
 			Occurrence: models.Occurrence{
 				OccurrenceID: uuid.New(),
@@ -301,12 +340,17 @@ func TestDispatcher(t *testing.T) {
 			Metadata:    []byte(`{"key": "value"}`),
 			Tags:        pq.StringArray{"test"},
 		}
+		fmt.Printf("[PROFILE] schedule creation: %v\n", time.Since(scheduleStart))
 		for i := 0; i < 4; i++ {
+			callStart := time.Now()
 			err := dispatcher.DispatchWebhook(ctx, schedule)
+			fmt.Printf("[PROFILE] DispatchWebhook call %d: %v\n", i+1, time.Since(callStart))
 			assert.NoError(t, err)
 		}
-		// Should alternate between c1 and c2
+		assertionStart := time.Now()
 		assert.Equal(t, []string{"client3:c1", "client3:c2", "client3:c1", "client3:c2"}, mockNotifier.calls)
+		fmt.Printf("[PROFILE] final assertion: %v\n", time.Since(assertionStart))
+		fmt.Printf("[PROFILE] total test duration: %v\n", time.Since(start))
 	})
 }
 
@@ -540,25 +584,25 @@ func TestDispatcher_DispatchQueueWorker(t *testing.T) {
 		err = redisClient.RPush(ctx, dispatchQueueKey, data).Err()
 		require.NoError(t, err)
 
-		// Before starting the worker, check the processing queue is empty
-		items, err := redisClient.LRange(ctx, dispatchProcessingKey, 0, -1).Result()
-		require.NoError(t, err)
-		assert.Len(t, items, 0)
-
 		// Run worker and wait for completion
 		runWorkerAndWait(ctx, dispatcher, scheduler, 3*time.Second)
 
-		// After worker runs, processing queue should be empty
-		items, err = redisClient.LRange(ctx, dispatchProcessingKey, 0, -1).Result()
+		// After worker runs, dispatch queue and retry queue should be empty
+		items, err := redisClient.LRange(ctx, dispatchQueueKey, 0, -1).Result()
 		require.NoError(t, err)
 		assert.Len(t, items, 0)
+		retryItems, err := redisClient.ZRange(ctx, retryQueueKey, 0, -1).Result()
+		require.NoError(t, err)
+		assert.Len(t, retryItems, 0)
 	})
 
-	t.Run("worker_leaves_item_in_processing_queue_on_failure_(less_than_max_retries)", func(t *testing.T) {
+	t.Run("worker_leaves_item_in_retry_queue_on_failure", func(t *testing.T) {
 		cleanup()
 		mockHTTP = new(MockHTTPClient)
 		mockHTTP.On("Do", mock.AnythingOfType("*http.Request")).Return((*http.Response)(nil), errors.New("fail")).Maybe()
 		dispatcher.SetHTTPClient(mockHTTP)
+		// Set retryDelay to 2s to ensure item stays in retry queue for test
+		dispatcher.retryDelay = 2 * time.Second
 		event := &models.Event{
 			ID:          uuid.New(),
 			Name:        "Worker Fail Event",
@@ -591,22 +635,26 @@ func TestDispatcher_DispatchQueueWorker(t *testing.T) {
 		}
 		data, err := json.Marshal(sched)
 		require.NoError(t, err)
-		err = redisClient.RPush(ctx, dispatchQueueKey, data).Err()
+		pushRes, err := redisClient.RPush(ctx, dispatchQueueKey, data).Result()
 		require.NoError(t, err)
+		fmt.Printf("[TEST DEBUG] RPush result: %v\n", pushRes)
+		time.Sleep(100 * time.Millisecond)
+		// Log the contents of the dispatch queue before starting the worker
+		items, err := redisClient.LRange(ctx, dispatchQueueKey, 0, -1).Result()
+		require.NoError(t, err)
+		fmt.Printf("[TEST DEBUG] Dispatch queue before worker: %v\n", items)
 
-		// Run worker and wait for completion (wait for 2 retries, less than maxRetries=3)
-		runWorkerAndWait(ctx, dispatcher, scheduler, 400*time.Millisecond)
-
-		// Small delay to ensure worker has finished updating the queue
+		// Run worker and wait for 2 retries (less than maxRetries=3)
+		runWorkerAndWait(ctx, dispatcher, scheduler, 1*time.Second)
 		time.Sleep(50 * time.Millisecond)
 
-		// Processing queue should have the item (since not yet max retries)
-		items, err := redisClient.LRange(ctx, dispatchProcessingKey, 0, -1).Result()
+		// Retry queue should have the item (since not yet max retries)
+		retryItems, err := redisClient.ZRange(ctx, retryQueueKey, 0, -1).Result()
 		require.NoError(t, err)
-		assert.Len(t, items, 1)
+		assert.Len(t, retryItems, 1)
 	})
 
-	t.Run("worker_removes_item_from_processing_queue_after_max_retries", func(t *testing.T) {
+	t.Run("worker_removes_item_after_max_retries", func(t *testing.T) {
 		cleanup()
 		mockHTTP = new(MockHTTPClient)
 		mockHTTP.On("Do", mock.AnythingOfType("*http.Request")).Return((*http.Response)(nil), errors.New("fail"))
@@ -658,9 +706,12 @@ func TestDispatcher_DispatchQueueWorker(t *testing.T) {
 		// Run worker and wait for enough time for maxRetries (2 seconds is more than enough now)
 		runWorkerAndWait(ctx, dispatcher, scheduler, 2*time.Second)
 
-		// Processing queue should be empty (item removed after max retries)
-		items, err := redisClient.LRange(ctx, dispatchProcessingKey, 0, -1).Result()
+		// After max retries, both dispatch and retry queues should be empty
+		items, err := redisClient.LRange(ctx, dispatchQueueKey, 0, -1).Result()
 		require.NoError(t, err)
 		assert.Len(t, items, 0)
+		retryItems, err := redisClient.ZRange(ctx, retryQueueKey, 0, -1).Result()
+		require.NoError(t, err)
+		assert.Len(t, retryItems, 0)
 	})
 }
