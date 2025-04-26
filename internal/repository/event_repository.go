@@ -164,7 +164,7 @@ func (r *EventRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	}
 
 	// Remove all scheduled occurrences for this event from Redis
-	err = r.removeEventOccurrencesFromRedis(ctx, id)
+	err = r.RemoveEventOccurrencesFromRedis(ctx, id)
 	if err != nil {
 		r.logger.Warn("Failed to remove event occurrences from Redis", zap.String("event_id", id.String()), zap.Error(err))
 	}
@@ -172,19 +172,28 @@ func (r *EventRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
-// removeEventOccurrencesFromRedis removes all scheduled occurrences for an event from Redis
-func (r *EventRepository) removeEventOccurrencesFromRedis(ctx context.Context, eventID uuid.UUID) error {
-	results, err := r.redis.ZRange(ctx, "schedule:events", 0, -1).Result()
+// RemoveEventOccurrencesFromRedis removes all scheduled occurrences for an event from Redis
+func (r *EventRepository) RemoveEventOccurrencesFromRedis(ctx context.Context, eventID uuid.UUID) error {
+	results, err := r.redis.ZRange(ctx, "schedules", 0, -1).Result()
 	if err != nil {
 		return err
 	}
-	for _, res := range results {
-		var occ models.Occurrence
-		if err := json.Unmarshal([]byte(res), &occ); err != nil {
+	for _, key := range results {
+		// Fetch the schedule data from the hash
+		data, err := r.redis.HGet(ctx, "schedule:data", key).Result()
+		if err != nil {
+			continue // skip if not found or error
+		}
+		var sched struct {
+			EventID uuid.UUID `json:"event_id"`
+		}
+		if err := json.Unmarshal([]byte(data), &sched); err != nil {
 			continue // skip invalid
 		}
-		if occ.EventID == eventID {
-			r.redis.ZRem(ctx, "schedule:events", res)
+		if sched.EventID == eventID {
+			// Remove from both sorted set and hash
+			r.redis.ZRem(ctx, "schedules", key)
+			r.redis.HDel(ctx, "schedule:data", key)
 		}
 	}
 	return nil

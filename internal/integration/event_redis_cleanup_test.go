@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -62,16 +63,19 @@ func TestEventRepository_RedisCleanupOnDelete(t *testing.T) {
 	for _, occ := range occurrences {
 		data, err := json.Marshal(occ)
 		require.NoError(t, err)
+		key := "schedule:" + event.ID.String() + ":" + fmt.Sprintf("%d", occ.ScheduledAt.Unix())
 		score := float64(occ.ScheduledAt.UnixMilli())
-		_, err = redisClient.ZAdd(ctx, "schedule:events", redis.Z{
+		_, err = redisClient.ZAdd(ctx, "schedules", redis.Z{
 			Score:  score,
-			Member: string(data),
+			Member: key,
 		}).Result()
+		require.NoError(t, err)
+		_, err = redisClient.HSet(ctx, "schedule:data", key, data).Result()
 		require.NoError(t, err)
 	}
 
 	// Ensure occurrences are in Redis
-	results, err := redisClient.ZRange(ctx, "schedule:events", 0, -1).Result()
+	results, err := redisClient.ZRange(ctx, "schedules", 0, -1).Result()
 	require.NoError(t, err)
 	assert.NotEmpty(t, results)
 
@@ -80,11 +84,16 @@ func TestEventRepository_RedisCleanupOnDelete(t *testing.T) {
 	require.NoError(t, err)
 
 	// Ensure occurrences for this event are removed from Redis
-	results, err = redisClient.ZRange(ctx, "schedule:events", 0, -1).Result()
+	results, err = redisClient.ZRange(ctx, "schedules", 0, -1).Result()
 	require.NoError(t, err)
 	for _, res := range results {
+		// Fetch from hash instead of decoding directly
+		data, err := redisClient.HGet(ctx, "schedule:data", res).Result()
+		if err != nil {
+			continue // skip if not found
+		}
 		var occ models.Occurrence
-		err := json.Unmarshal([]byte(res), &occ)
+		err = json.Unmarshal([]byte(data), &occ)
 		if err == nil {
 			assert.NotEqual(t, event.ID, occ.EventID, "Occurrence for deleted event should be removed from Redis")
 		}

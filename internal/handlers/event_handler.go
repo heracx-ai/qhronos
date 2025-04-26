@@ -175,6 +175,22 @@ func (h *EventHandler) UpdateEvent(c *gin.Context) {
 		return
 	}
 
+	// Remove all scheduled occurrences for this event from Redis
+	err = h.repo.RemoveEventOccurrencesFromRedis(c, event.ID)
+	if err != nil {
+		// Log but do not fail the request
+		zap.L().Warn("Failed to remove old scheduled occurrences from Redis", zap.String("event_id", event.ID.String()), zap.Error(err))
+	}
+
+	// Re-expand the event to schedule new occurrences
+	go func() {
+		if event.Schedule == nil {
+			_ = h.expander.ExpandNonRecurringEvent(context.Background(), event)
+		} else {
+			_ = h.expander.ExpandRecurringEvent(context.Background(), event)
+		}
+	}()
+
 	c.JSON(http.StatusOK, event)
 }
 

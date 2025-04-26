@@ -241,4 +241,90 @@ func TestEventExpander(t *testing.T) {
 		}
 		assert.Equal(t, expectedMondays, scheduledMondays)
 	})
+
+	t.Run("update_event_cleans_and_reexpands", func(t *testing.T) {
+		cleanup()
+		fixedNow := time.Date(2024, 6, 1, 10, 0, 0, 0, time.UTC) // Saturday
+		lookAheadDuration := 14 * 24 * time.Hour                 // 2 weeks
+		gracePeriod := 2 * time.Minute
+		expansionInterval := 5 * time.Minute
+
+		oldNow := TimeNow
+		TimeNow = func() time.Time { return fixedNow }
+		defer func() { TimeNow = oldNow }()
+
+		eventStart := fixedNow.AddDate(0, 0, -7) // 1 week ago
+		scheduleConfig := &models.ScheduleConfig{
+			Frequency: "weekly",
+			Interval:  1,
+			ByDay:     []string{"MO"}, // Every Monday
+		}
+		event := &models.Event{
+			ID:          uuid.New(),
+			Name:        "Weekly Event",
+			Description: "Weekly event for update test",
+			StartTime:   eventStart,
+			Webhook:     "http://example.com",
+			Schedule:    scheduleConfig,
+			Status:      models.EventStatusActive,
+			Metadata:    []byte(`{"key": "value"}`),
+			Tags:        pq.StringArray{"test"},
+			CreatedAt:   eventStart,
+		}
+		err := eventRepo.Create(ctx, event)
+		require.NoError(t, err)
+
+		expander := NewExpander(scheduler, eventRepo, occurrenceRepo, lookAheadDuration, expansionInterval, gracePeriod, logger)
+		err = expander.ExpandEvents(ctx)
+		require.NoError(t, err)
+
+		// Check that Monday is scheduled
+		results, err := redisClient.ZRange(ctx, ScheduleKey, 0, -1).Result()
+		require.NoError(t, err)
+		var scheduledDays []time.Weekday
+		for _, key := range results {
+			data, err := redisClient.HGet(ctx, "schedule:data", key).Result()
+			require.NoError(t, err)
+			var sched models.Schedule
+			err = json.Unmarshal([]byte(data), &sched)
+			require.NoError(t, err)
+			if sched.EventID == event.ID {
+				scheduledDays = append(scheduledDays, sched.ScheduledAt.Weekday())
+			}
+		}
+		assert.Contains(t, scheduledDays, time.Monday)
+		assert.NotContains(t, scheduledDays, time.Wednesday)
+
+		// Update event to schedule on Wednesday instead
+		event.Schedule = &models.ScheduleConfig{
+			Frequency: "weekly",
+			Interval:  1,
+			ByDay:     []string{"WE"}, // Every Wednesday
+		}
+		err = eventRepo.Update(ctx, event)
+		require.NoError(t, err)
+		// Remove old occurrences
+		err = eventRepo.RemoveEventOccurrencesFromRedis(ctx, event.ID)
+		require.NoError(t, err)
+		// Re-expand
+		err = expander.ExpandEvents(ctx)
+		require.NoError(t, err)
+
+		// Check that only Wednesday is scheduled
+		results, err = redisClient.ZRange(ctx, ScheduleKey, 0, -1).Result()
+		require.NoError(t, err)
+		scheduledDays = scheduledDays[:0]
+		for _, key := range results {
+			data, err := redisClient.HGet(ctx, "schedule:data", key).Result()
+			require.NoError(t, err)
+			var sched models.Schedule
+			err = json.Unmarshal([]byte(data), &sched)
+			require.NoError(t, err)
+			if sched.EventID == event.ID {
+				scheduledDays = append(scheduledDays, sched.ScheduledAt.Weekday())
+			}
+		}
+		assert.Contains(t, scheduledDays, time.Wednesday)
+		assert.NotContains(t, scheduledDays, time.Monday)
+	})
 }
