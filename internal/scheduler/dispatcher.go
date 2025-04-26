@@ -296,6 +296,11 @@ func (d *Dispatcher) Run(ctx context.Context, scheduler *Scheduler, workerCount 
 						// Remove from processing queue, do not push to dead letter queue
 						queueBefore, _ := scheduler.redis.LRange(ctx, dispatchProcessingKey, 0, -1).Result()
 						d.logger.Debug("[DISPATCHER] Max retries exceeded, removing from processing queue", zap.Int("worker_id", workerID), zap.Any("queue", queueBefore), zap.String("removing", data))
+						// Debug: print the data string and all items in the queue for comparison
+						d.logger.Debug("[DEBUG] LRem target data", zap.String("data", data))
+						for idx, item := range queueBefore {
+							d.logger.Debug("[DEBUG] Queue item", zap.Int("index", idx), zap.String("item", item))
+						}
 						// Use non-cancellable context for removal
 						_ = scheduler.redis.LRem(context.Background(), dispatchProcessingKey, 1, data).Err()
 						queueAfter, _ := scheduler.redis.LRange(ctx, dispatchProcessingKey, 0, -1).Result()

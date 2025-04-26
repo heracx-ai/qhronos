@@ -499,6 +499,12 @@ func TestDispatcher_DispatchQueueWorker(t *testing.T) {
 
 	t.Run("worker_processes_and_removes_from_processing_queue_on_success", func(t *testing.T) {
 		cleanup()
+		mockHTTP = new(MockHTTPClient)
+		mockHTTP.On("Do", mock.AnythingOfType("*http.Request")).Return(&http.Response{
+			StatusCode: 200,
+			Body:       ioutil.NopCloser(bytes.NewBuffer([]byte{})),
+		}, nil)
+		dispatcher.SetHTTPClient(mockHTTP)
 		event := &models.Event{
 			ID:          uuid.New(),
 			Name:        "Worker Event",
@@ -534,12 +540,6 @@ func TestDispatcher_DispatchQueueWorker(t *testing.T) {
 		err = redisClient.RPush(ctx, dispatchQueueKey, data).Err()
 		require.NoError(t, err)
 
-		// Setup HTTP mock
-		mockHTTP.On("Do", mock.AnythingOfType("*http.Request")).Return(&http.Response{
-			StatusCode: 200,
-			Body:       ioutil.NopCloser(bytes.NewBuffer([]byte{})),
-		}, nil)
-
 		// Before starting the worker, check the processing queue is empty
 		items, err := redisClient.LRange(ctx, dispatchProcessingKey, 0, -1).Result()
 		require.NoError(t, err)
@@ -556,12 +556,9 @@ func TestDispatcher_DispatchQueueWorker(t *testing.T) {
 
 	t.Run("worker_leaves_item_in_processing_queue_on_failure_(less_than_max_retries)", func(t *testing.T) {
 		cleanup()
-		// Reset and reattach mock HTTP client
 		mockHTTP = new(MockHTTPClient)
+		mockHTTP.On("Do", mock.AnythingOfType("*http.Request")).Return((*http.Response)(nil), errors.New("fail")).Maybe()
 		dispatcher.SetHTTPClient(mockHTTP)
-		// Set dispatcher retryDelay to 100ms for fast test
-		dispatcher.retryDelay = 100 * time.Millisecond
-
 		event := &models.Event{
 			ID:          uuid.New(),
 			Name:        "Worker Fail Event",
@@ -597,9 +594,6 @@ func TestDispatcher_DispatchQueueWorker(t *testing.T) {
 		err = redisClient.RPush(ctx, dispatchQueueKey, data).Err()
 		require.NoError(t, err)
 
-		// Setup HTTP mock to always fail for every attempt (allow any number of calls due to timing variability)
-		mockHTTP.On("Do", mock.AnythingOfType("*http.Request")).Return((*http.Response)(nil), errors.New("fail")).Maybe()
-
 		// Run worker and wait for completion (wait for 2 retries, less than maxRetries=3)
 		runWorkerAndWait(ctx, dispatcher, scheduler, 400*time.Millisecond)
 
@@ -614,9 +608,11 @@ func TestDispatcher_DispatchQueueWorker(t *testing.T) {
 
 	t.Run("worker_removes_item_from_processing_queue_after_max_retries", func(t *testing.T) {
 		cleanup()
-		// Set dispatcher retryDelay to 100ms for fast test
-		dispatcher.retryDelay = 100 * time.Millisecond
-
+		mockHTTP = new(MockHTTPClient)
+		mockHTTP.On("Do", mock.AnythingOfType("*http.Request")).Return((*http.Response)(nil), errors.New("fail"))
+		dispatcher.SetHTTPClient(mockHTTP)
+		// Set retryDelay to 10ms for fast test
+		dispatcher.retryDelay = 10 * time.Millisecond
 		event := &models.Event{
 			ID:          uuid.New(),
 			Name:        "Worker Max Retry Event",
@@ -659,11 +655,8 @@ func TestDispatcher_DispatchQueueWorker(t *testing.T) {
 		err = redisClient.RPush(ctx, dispatchQueueKey, data).Err()
 		require.NoError(t, err)
 
-		// Setup HTTP mock to fail
-		mockHTTP.On("Do", mock.AnythingOfType("*http.Request")).Return((*http.Response)(nil), errors.New("fail"))
-
-		// Run worker and wait for completion (wait for enough time for maxRetries)
-		runWorkerAndWait(ctx, dispatcher, scheduler, 1*time.Second)
+		// Run worker and wait for enough time for maxRetries (2 seconds is more than enough now)
+		runWorkerAndWait(ctx, dispatcher, scheduler, 2*time.Second)
 
 		// Processing queue should be empty (item removed after max retries)
 		items, err := redisClient.LRange(ctx, dispatchProcessingKey, 0, -1).Result()
