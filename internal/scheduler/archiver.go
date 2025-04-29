@@ -1,17 +1,19 @@
 package scheduler
 
 import (
-	"database/sql"
+	"context"
 	"encoding/json"
 	"time"
 
 	"github.com/feedloop/qhronos/internal/config"
 	"github.com/jmoiron/sqlx"
+	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 )
 
 const (
-	archiveLockKey = 12345 // Arbitrary unique key for advisory lock
+	archiveLockKey      = 12345 // Arbitrary unique key for advisory lock
+	lastArchivalTimeKey = "archiver:last_archival_time"
 )
 
 func acquireArchiveLock(db *sqlx.DB) (bool, error) {
@@ -25,28 +27,32 @@ func releaseArchiveLock(db *sqlx.DB) error {
 	return err
 }
 
-func shouldArchive(db *sqlx.DB, checkPeriod time.Duration) (bool, error) {
-	var lastTime time.Time
-	err := db.Get(&lastTime, "SELECT value::timestamptz FROM system_config WHERE key = 'last_archival_time'")
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return true, nil // Never archived before
+func shouldArchiveRedis(ctx context.Context, rdb *redis.Client, checkPeriod time.Duration) (bool, error) {
+	val, err := rdb.Get(ctx, lastArchivalTimeKey).Result()
+	if err == redis.Nil {
+		// Not set yet, set to now + checkPeriod
+		nextTime := time.Now().Add(checkPeriod)
+		err := rdb.Set(ctx, lastArchivalTimeKey, nextTime.Format(time.RFC3339), 0).Err()
+		if err != nil {
+			return false, err
 		}
+		return true, nil // Should archive now
+	} else if err != nil {
 		return false, err
 	}
-	if time.Since(lastTime) < checkPeriod {
+	lastTime, err := time.Parse(time.RFC3339, val)
+	if err != nil {
+		return false, err
+	}
+	if time.Now().Before(lastTime) {
 		return false, nil
 	}
 	return true, nil
 }
 
-func updateLastArchivalTime(db *sqlx.DB) error {
-	_, err := db.Exec(`
-		INSERT INTO system_config (key, value, description, updated_by)
-		VALUES ('last_archival_time', now(), 'Last archival run', 'system')
-		ON CONFLICT (key) DO UPDATE SET value = now(), updated_at = now(), updated_by = 'system'
-	`)
-	return err
+func updateLastArchivalTimeRedis(ctx context.Context, rdb *redis.Client, checkPeriod time.Duration) error {
+	nextTime := time.Now().Add(checkPeriod)
+	return rdb.Set(ctx, lastArchivalTimeKey, nextTime.Format(time.RFC3339), 0).Err()
 }
 
 func syncRetentionConfigToDB(db *sqlx.DB, durations config.RetentionDurations) error {
@@ -70,12 +76,13 @@ func syncRetentionConfigToDB(db *sqlx.DB, durations config.RetentionDurations) e
 	return err
 }
 
-func StartArchivalScheduler(db *sqlx.DB, checkPeriod time.Duration, durations config.RetentionDurations, stopCh <-chan struct{}, logger *zap.Logger) {
+func StartArchivalScheduler(db *sqlx.DB, rdb *redis.Client, checkPeriod time.Duration, durations config.RetentionDurations, stopCh <-chan struct{}, logger *zap.Logger) {
 	// Sync retention config on startup
 	if err := syncRetentionConfigToDB(db, durations); err != nil {
 		logger.Error("[archiver] Failed to sync retention config", zap.Error(err))
 	}
 	ticker := time.NewTicker(checkPeriod)
+	ctx := context.Background()
 	go func() {
 		defer ticker.Stop()
 		for {
@@ -90,7 +97,7 @@ func StartArchivalScheduler(db *sqlx.DB, checkPeriod time.Duration, durations co
 					logger.Debug("[archiver] Another instance is archiving, skipping this cycle.")
 					continue
 				}
-				shouldRun, err := shouldArchive(db, checkPeriod)
+				shouldRun, err := shouldArchiveRedis(ctx, rdb, checkPeriod)
 				if err != nil {
 					logger.Error("[archiver] Error checking last archival time", zap.Error(err))
 					releaseArchiveLock(db)
@@ -107,7 +114,7 @@ func StartArchivalScheduler(db *sqlx.DB, checkPeriod time.Duration, durations co
 					releaseArchiveLock(db)
 					continue
 				}
-				if err := updateLastArchivalTime(db); err != nil {
+				if err := updateLastArchivalTimeRedis(ctx, rdb, checkPeriod); err != nil {
 					logger.Error("[archiver] Error updating last archival time", zap.Error(err))
 				}
 				logger.Info("[archiver] Archival completed successfully.")

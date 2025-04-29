@@ -197,7 +197,7 @@ func main() {
 	// Initialize services
 	tokenService := services.NewTokenService(cfg.Auth.MasterToken, cfg.Auth.JWTSecret)
 	hmacService := services.NewHMACService(cfg.HMAC.DefaultSecret)
-	dispatcher := scheduler.NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, cfg.DispatchMaxRetries, cfg.DispatchRetryBackoff, wsHandler)
+	dispatcher := scheduler.NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, cfg.DispatchMaxRetries, cfg.DispatchRetryBackoff, wsHandler, schedulerService)
 
 	// Initialize handlers
 	eventHandler := handlers.NewEventHandler(eventRepo, expander)
@@ -232,7 +232,7 @@ func main() {
 
 	// Start archival scheduler in background
 	archivalStopCh := make(chan struct{})
-	scheduler.StartArchivalScheduler(db, cfg.Archival.CheckPeriod, *durations, archivalStopCh, logger)
+	scheduler.StartArchivalScheduler(db, redisClient, cfg.Archival.CheckPeriod, *durations, archivalStopCh, logger)
 
 	// Start scheduler services in background
 	ctx := context.Background()

@@ -34,6 +34,7 @@ type Dispatcher struct {
 	retryDelay     time.Duration
 	logger         *zap.Logger
 	clientNotifier ClientNotifier // optional, for q: webhooks
+	scheduler      *Scheduler     // new field for scheduler
 }
 
 // HTTPClient interface for mocking HTTP requests
@@ -50,7 +51,7 @@ func (d *DefaultHTTPClient) Do(req *http.Request) (*http.Response, error) {
 	return d.client.Do(req)
 }
 
-func NewDispatcher(eventRepo *repository.EventRepository, occurrenceRepo *repository.OccurrenceRepository, hmacService *services.HMACService, logger *zap.Logger, maxRetries int, retryDelay time.Duration, clientNotifier ClientNotifier) *Dispatcher {
+func NewDispatcher(eventRepo *repository.EventRepository, occurrenceRepo *repository.OccurrenceRepository, hmacService *services.HMACService, logger *zap.Logger, maxRetries int, retryDelay time.Duration, clientNotifier ClientNotifier, scheduler *Scheduler) *Dispatcher {
 	return &Dispatcher{
 		eventRepo:      eventRepo,
 		occurrenceRepo: occurrenceRepo,
@@ -60,6 +61,7 @@ func NewDispatcher(eventRepo *repository.EventRepository, occurrenceRepo *reposi
 		retryDelay:     retryDelay,
 		logger:         logger,
 		clientNotifier: clientNotifier,
+		scheduler:      scheduler,
 	}
 }
 
@@ -70,6 +72,23 @@ func (d *Dispatcher) SetHTTPClient(client HTTPClient) {
 
 // DispatchWebhook sends a webhook request and handles a single attempt (no in-process retry)
 func (d *Dispatcher) DispatchWebhook(ctx context.Context, sched *models.Schedule) error {
+	// Defensive: Clean up orphaned schedule if event does not exist
+	event, err := d.eventRepo.GetByID(ctx, sched.EventID)
+	if err != nil || event == nil {
+		key := fmt.Sprintf("schedule:%s:%d", sched.EventID.String(), sched.ScheduledAt.Unix())
+		if d.scheduler != nil && d.scheduler.redis != nil {
+			_, zremErr := d.scheduler.redis.ZRem(ctx, ScheduleKey, key).Result()
+			_, hdelErr := d.scheduler.redis.HDel(ctx, "schedule:data", key).Result()
+			d.logger.Warn("Orphaned schedule found and removed",
+				zap.String("event_id", sched.EventID.String()),
+				zap.String("schedule_key", key),
+				zap.Error(err),
+				zap.Error(zremErr),
+				zap.Error(hdelErr),
+			)
+		}
+		return fmt.Errorf("event not found: %s", sched.EventID)
+	}
 	if strings.HasPrefix(sched.Webhook, "q:") {
 		if d.clientNotifier == nil {
 			return fmt.Errorf("client notifier not configured for q: webhooks")
@@ -184,7 +203,7 @@ func (d *Dispatcher) DispatchWebhook(ctx context.Context, sched *models.Schedule
 	}
 	_ = d.occurrenceRepo.Create(ctx, logOccurrence)
 	// Auto-inactivate one-time events after dispatch (success or max retries)
-	event, err := d.eventRepo.GetByID(ctx, sched.EventID)
+	event, err = d.eventRepo.GetByID(ctx, sched.EventID)
 	if event == nil {
 		return fmt.Errorf("event not found: %s", sched.EventID)
 	}

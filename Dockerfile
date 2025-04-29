@@ -1,15 +1,15 @@
 # syntax=docker/dockerfile:1
 
 # Build stage
-FROM golang:1.23 as builder
+FROM golang:1.23 AS builder
 WORKDIR /app
 COPY . .
-RUN go build -o qhronosd ./cmd
+RUN make
 
 # Run stage
 FROM debian:bullseye-slim
 WORKDIR /app
-COPY --from=builder /app/qhronosd .
-COPY config.example.yaml ./config.yaml
+COPY --from=builder /app/bin/qhronosd .
+COPY config.example.yml ./config.yml
 EXPOSE 8080
-CMD ["./qhronosd"] 
+CMD ["./qhronosd", "-c", "config.yml"] 

@@ -81,7 +81,8 @@ func TestDispatcher(t *testing.T) {
 	hmacService := services.NewHMACService("test-secret")
 	mockHTTP := new(MockHTTPClient)
 
-	dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, nil)
+	scheduler := NewScheduler(redisClient, logger)
+	dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, nil, scheduler)
 	dispatcher.SetHTTPClient(mockHTTP)
 
 	// Add cleanup function
@@ -251,7 +252,7 @@ func TestDispatcher(t *testing.T) {
 		dispatcherStart := time.Now()
 		mockNotifier := NewMockClientNotifier()
 		mockNotifier.connected["client1"] = []string{"c1"}
-		dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, mockNotifier)
+		dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, mockNotifier, scheduler)
 		fmt.Printf("[PROFILE] dispatcher creation: %v\n", time.Since(dispatcherStart))
 		scheduleStart := time.Now()
 		schedule := &models.Schedule{
@@ -280,7 +281,7 @@ func TestDispatcher(t *testing.T) {
 	t.Run("client hook dispatch - no client connected", func(t *testing.T) {
 		cleanup()
 		mockNotifier := NewMockClientNotifier()
-		dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 2, 1*time.Millisecond, mockNotifier)
+		dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 2, 1*time.Millisecond, mockNotifier, scheduler)
 		// Insert the event into the database
 		event := &models.Event{
 			ID:          uuid.New(),
@@ -312,7 +313,7 @@ func TestDispatcher(t *testing.T) {
 		err = redisClient.RPush(ctx, dispatchQueueKey, data).Err()
 		require.NoError(t, err)
 		// Run the worker for a short time to process retries
-		runWorkerAndWait(ctx, dispatcher, NewScheduler(redisClient, logger), 20*time.Millisecond)
+		runWorkerAndWait(ctx, dispatcher, scheduler, 20*time.Millisecond)
 		// Now assert the number of calls
 		assert.Equal(t, 3, len(mockNotifier.calls)) // 3 attempts (initial + 2 retries)
 	})
@@ -325,7 +326,7 @@ func TestDispatcher(t *testing.T) {
 		dispatcherStart := time.Now()
 		mockNotifier := NewMockClientNotifier()
 		mockNotifier.connected["client3"] = []string{"c1", "c2"}
-		dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Millisecond, mockNotifier)
+		dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Millisecond, mockNotifier, scheduler)
 		fmt.Printf("[PROFILE] dispatcher creation: %v\n", time.Since(dispatcherStart))
 		scheduleStart := time.Now()
 		schedule := &models.Schedule{
@@ -364,11 +365,12 @@ func TestDispatcher_RedisOnlyDispatch(t *testing.T) {
 	occurrenceRepo := repository.NewOccurrenceRepository(db, logger)
 	hmacService := services.NewHMACService("test-secret")
 	mockHTTP := new(MockHTTPClient)
-	dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, nil)
+	scheduler := NewScheduler(redisClient, logger)
+	dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, nil, scheduler)
 	dispatcher.SetHTTPClient(mockHTTP)
 
 	// Create Scheduler instance
-	scheduler := NewScheduler(redisClient, logger)
+	scheduler = NewScheduler(redisClient, logger)
 
 	// Create event and schedule, schedule in Redis
 	event := &models.Event{
@@ -437,11 +439,12 @@ func TestDispatcher_GetDueSchedules(t *testing.T) {
 	occurrenceRepo := repository.NewOccurrenceRepository(db, logger)
 	hmacService := services.NewHMACService("test-secret")
 	mockHTTP := new(MockHTTPClient)
-	dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, nil)
+	scheduler := NewScheduler(redisClient, logger)
+	dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, nil, scheduler)
 	dispatcher.SetHTTPClient(mockHTTP)
 
 	// Create Scheduler instance
-	scheduler := NewScheduler(redisClient, logger)
+	scheduler = NewScheduler(redisClient, logger)
 
 	// Create event and schedule, schedule in Redis
 	event := &models.Event{
@@ -529,9 +532,9 @@ func TestDispatcher_DispatchQueueWorker(t *testing.T) {
 	occurrenceRepo := repository.NewOccurrenceRepository(db, logger)
 	hmacService := services.NewHMACService("test-secret")
 	mockHTTP := new(MockHTTPClient)
-	dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, nil)
-	dispatcher.SetHTTPClient(mockHTTP)
 	scheduler := NewScheduler(redisClient, logger)
+	dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, nil, scheduler)
+	dispatcher.SetHTTPClient(mockHTTP)
 
 	cleanup := func() {
 		_, err := db.ExecContext(ctx, "TRUNCATE TABLE occurrences CASCADE")

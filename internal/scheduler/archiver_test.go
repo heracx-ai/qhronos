@@ -11,6 +11,7 @@ import (
 	"github.com/feedloop/qhronos/internal/testutils"
 	"github.com/google/uuid"
 	"github.com/lib/pq"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -71,7 +72,12 @@ func TestArchivalScheduler(t *testing.T) {
 	durations, err := (&config.Config{Retention: retention}).ParseRetentionDurations()
 	require.NoError(t, err)
 	checkPeriod := 2 * time.Second
-	StartArchivalScheduler(db, checkPeriod, *durations, archivalStopCh, logger)
+
+	// Check that last_archival_time is not set in Redis initially
+	val, err := redisClient.Get(ctx, "archiver:last_archival_time").Result()
+	assert.ErrorIs(t, err, redis.Nil)
+
+	StartArchivalScheduler(db, redisClient, checkPeriod, *durations, archivalStopCh, logger)
 
 	// Also call the archival function directly for immediate effect
 	_, err = db.ExecContext(ctx, "SELECT archive_old_data($1)", "24 hours")
@@ -80,6 +86,12 @@ func TestArchivalScheduler(t *testing.T) {
 	// Wait for the archival to run
 	time.Sleep(3 * time.Second)
 	close(archivalStopCh)
+
+	// Check that last_archival_time is now set in Redis
+	val, err = redisClient.Get(ctx, "archiver:last_archival_time").Result()
+	assert.NoError(t, err)
+	_, err = time.Parse(time.RFC3339, val)
+	assert.NoError(t, err)
 
 	// Check that the old event and occurrence are gone from main tables
 	e, err := eventRepo.GetByID(ctx, oldEvent.ID)
