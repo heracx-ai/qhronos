@@ -7,7 +7,7 @@ COPY . .
 RUN make
 
 # Run stage
-FROM debian:bullseye-slim
+FROM golang:1.23
 WORKDIR /app
 COPY --from=builder /app/bin/qhronosd .
 COPY config.example.yml ./config.yml

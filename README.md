@@ -46,11 +46,17 @@ For system architecture and in-depth design, see [design.md](./design.md).
 - Docker & Docker Compose
 - PostgreSQL & Redis (or use Docker Compose)
 
-### Run with Docker Compose
+### First-Time Setup
+For your first run, copy the example config, build the Docker image, and start only the database dependencies and run migrations:
 ```sh
-git clone https://github.com/feedloop/qhronos.git
-cd qhronos
-docker-compose up
+cp config.example.yml config.yml
+make docker-build
+make docker-up
+make migrate-up
+```
+Then, to start all services (including the app):
+```sh
+make docker-qup
 ```
 The API will be available at `http://localhost:8080`.
 
@@ -77,13 +83,17 @@ Before running Qhronos, set up your configuration:
 ### Database Setup & Migration
 Before running Qhronos for the first time, initialize the PostgreSQL database and apply migrations:
 
-1. Start PostgreSQL and Redis using Docker Compose:
+1. Start PostgreSQL and Redis using Make:
    ```sh
-   docker-compose up -d postgres redis
+   make docker-up
    ```
-2. Run database migrations using the binary:
+2. Run database migrations:
    ```sh
-   ./bin/qhronosd --migrate --config config.yaml
+   make migrate-up
+   ```
+3. Start all services (including Qhronos):
+   ```sh
+   make docker-qup
    ```
 
 This will create all required tables and schema in your database.
@@ -239,9 +249,14 @@ make docker-build
 # docker build -t qhronosd:latest .
 ```
 
-### Run the Docker container
+### Run all services with Make (Recommended)
 ```sh
-docker run -p 8080:8080 qhronosd:latest
+make docker-qup
+```
+
+### Stop all services
+```sh
+make docker-qdown
 ```
 
 ### Override configuration

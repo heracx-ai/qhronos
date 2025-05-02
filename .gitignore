@@ -28,9 +28,7 @@ go.work
 *.swo
 
 # Config files with sensitive data
-config.yaml
-config.*.yaml
-!config.example.yaml
+config.yml
 
 # Data directories
 data/

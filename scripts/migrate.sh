@@ -20,6 +20,13 @@ if ! docker exec $CONTAINER_ID pg_isready -U postgres > /dev/null 2>&1; then
     exit 1
 fi
 
+# Ensure the qhronos database exists
+DB_EXISTS=$(docker exec $CONTAINER_ID psql -U postgres -tAc "SELECT 1 FROM pg_database WHERE datname='qhronos';")
+if [ "$DB_EXISTS" != "1" ]; then
+    echo "Database qhronos does not exist. Creating..."
+    docker exec $CONTAINER_ID psql -U postgres -c "CREATE DATABASE qhronos;"
+fi
+
 # Ensure schema_migrations table exists
 MIGRATION_TABLE_EXISTS=$(docker exec $CONTAINER_ID psql -U postgres -d qhronos -tAc "SELECT to_regclass('public.schema_migrations') IS NOT NULL;")
 if [ "$MIGRATION_TABLE_EXISTS" != "t" ]; then

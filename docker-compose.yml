@@ -21,4 +21,17 @@ services:
       - "6379:6379"
     volumes:
       - ./data/redis:/data
-    restart: unless-stopped 
+    restart: unless-stopped
+
+  qhronosd:
+    image: qhronosd:latest
+    container_name: qhronosd
+    depends_on:
+      - postgres
+      - redis
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config.yml:/app/config.yml
+    environment:
+      - CONFIG_PATH=/app/config.yml 
