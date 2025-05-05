@@ -1,4 +1,4 @@
-name: build-qhronos-scheduler
+name: build-qhronos-production
 
 on:
   workflow_dispatch:
@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       IMAGE_TAG: latest
-      BUILD_DIR: ./landing
+      BUILD_DIR: ./ai-engine
       REGISTRY_ALIAS: w7r9n4j5
     steps:
       - name: Checkout code
@@ -35,10 +35,10 @@ jobs:
           echo "TAG=$(echo ${GITHUB_SHA::8})" >> $GITHUB_ENV
           echo "REGISTRY=${{ steps.login-ecr.outputs.registry }}" >> $GITHUB_ENV
 
-      - name: Build, tag, and push landing Docker image to Amazon ECR
+      - name: Build, tag, and push backend docker image to Amazon ECR
         env:
           REPOSITORY: hera-qhronos-scheduler
-          TARGET: hera-scheduler
+          TARGET: hera-qhronos-production
         run: |
           docker build --target=$TARGET -t $REGISTRY/$REGISTRY_ALIAS/$REPOSITORY:$IMAGE_TAG $BUILD_DIR
           docker tag $REGISTRY/$REGISTRY_ALIAS/$REPOSITORY:$IMAGE_TAG $REGISTRY/$REGISTRY_ALIAS/$REPOSITORY:${{ env.TAG }}

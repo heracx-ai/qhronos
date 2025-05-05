@@ -7,7 +7,7 @@ COPY . .
 RUN make
 
 # Run stage
-FROM golang:1.24
+FROM golang:1.24 AS hera-qhronos-production
 WORKDIR /app
 COPY --from=builder /app/bin/qhronosd .
 COPY config.example.yml ./config.yml
