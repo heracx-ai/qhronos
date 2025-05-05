@@ -3,14 +3,14 @@ server:
 
 database:
   host: localhost
-  port: 5433
+  port: 5434
   user: postgres
   password: postgres
   dbname: qhronos
 
 redis:
   host: localhost
-  port: 6379
+  port: 6378
   password: ""
   db: 0
 

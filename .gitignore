@@ -32,6 +32,10 @@ config.yaml
 config.*.yaml
 !config.example.yaml
 
+config.yml
+config.*.yml
+!config.example.yml
+
 # Data directories
 data/
 data/postgres/

@@ -22,7 +22,7 @@ func SetupRoutes(
 	public := router.Group("/")
 	{
 		public.GET("/status", handlers.StatusHandler)
-		public.GET("/health", func(c *gin.Context) {
+		public.GET("/healthz", func(c *gin.Context) {
 			c.JSON(200, gin.H{"status": "ok"})
 		})
 	}

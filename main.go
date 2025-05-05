@@ -25,6 +25,7 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/postgres"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
+	"github.com/jmoiron/sqlx"
 	"github.com/redis/go-redis/v9"
 	"github.com/spf13/pflag"
 	"go.uber.org/zap"
@@ -161,18 +162,47 @@ func main() {
 	}
 
 	// Initialize database connection
-	db, err := database.Connect(cfg.Database.ToDBConfig())
-	if err != nil {
-		logger.Fatal("Failed to connect to database", zap.Error(err))
+	var db *sqlx.DB
+	maxDBRetries := 10
+	for i := 0; i < maxDBRetries; i++ {
+		db, err = database.Connect(cfg.Database.ToDBConfig())
+		if err == nil {
+			break
+		}
+		logger.Warn("Failed to connect to database, retrying...", zap.Int("attempt", i+1), zap.Error(err))
+		time.Sleep(2 * time.Second)
 	}
+
+	if err != nil {
+		logger.Fatal("Failed to connect to database after retries", zap.Error(err))
+	}
+
 	defer db.Close()
 
 	// Initialize Redis client
-	redisClient := redis.NewClient(&redis.Options{
-		Addr:     fmt.Sprintf("%s:%d", cfg.Redis.Host, cfg.Redis.Port),
-		Password: cfg.Redis.Password,
-		DB:       cfg.Redis.DB,
-	})
+	var redisClient *redis.Client
+	maxRedisRetries := 10
+	for i := 0; i < maxRedisRetries; i++ {
+		redisClient = redis.NewClient(&redis.Options{
+			Addr:     fmt.Sprintf("%s:%d", cfg.Redis.Host, cfg.Redis.Port),
+			Password: cfg.Redis.Password,
+			DB:       cfg.Redis.DB,
+		})
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		err := redisClient.Ping(ctx).Err()
+		cancel()
+		if err == nil {
+			break
+		} else {
+			logger.Warn("Failed to connect to Redis, retrying...", zap.Int("attempt", i+1), zap.Error(err))
+			time.Sleep(2 * time.Second)
+		}
+	}
+
+	if redisClient == nil {
+		logger.Fatal("Failed to create Redis client")
+	}
 	defer redisClient.Close()
 
 	// Initialize repositories

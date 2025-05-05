@@ -6,7 +6,7 @@ build:
 	@mkdir -p ./bin
 	go build -o $(BINARY_NAME) ./main.go
 
-.PHONY: help build clean test migrate-up migrate-down docker-up docker-down run docker-build migrate-clean-slate redis-cleanup
+.PHONY: help build clean test migrate-up migrate-down docker-up docker-down run docker-build migrate-clean-slate redis-cleanup docker-qup docker-qdown
 
 help:
 	@echo "Available targets:"
@@ -21,6 +21,8 @@ help:
 	@echo "  docker-down  Stop all containers"
 	@echo "  run          Build and run the qhronosd binary with default config"
 	@echo "  docker-build Build the Docker image for qhronosd"
+	@echo "  docker-qup   Start postgres, redis, and qhronosd containers"
+	@echo "  docker-qdown Stop and remove postgres, redis, and qhronosd containers"
 
 clean:
 	rm -f $(BINARY_NAME)
@@ -44,10 +46,16 @@ docker-down:
 	docker compose down
 
 run: build
-	./$(BINARY_NAME) --config config.yaml
+	./$(BINARY_NAME) --config config.yml
 
 docker-build:
 	docker build -t qhronosd:latest .
 
 redis-cleanup:
-	bash scripts/redis-cleanup.sh 
+	bash scripts/redis-cleanup.sh
+
+docker-qup:
+	docker compose up -d postgres redis qhronosd
+
+docker-qdown:
+	docker compose down -d qhronosd redis postgres
