@@ -16,13 +16,14 @@ import (
 )
 
 type EventRepository struct {
-	db     *sqlx.DB
-	logger *zap.Logger
-	redis  *redis.Client
+	db          *sqlx.DB
+	logger      *zap.Logger
+	redis       *redis.Client
+	redisPrefix string
 }
 
-func NewEventRepository(db *sqlx.DB, logger *zap.Logger, redis *redis.Client) *EventRepository {
-	return &EventRepository{db: db, logger: logger, redis: redis}
+func NewEventRepository(db *sqlx.DB, logger *zap.Logger, redis *redis.Client, prefix string) *EventRepository {
+	return &EventRepository{db: db, logger: logger, redis: redis, redisPrefix: prefix}
 }
 
 func timePtr(t time.Time) *time.Time {
@@ -174,13 +175,13 @@ func (r *EventRepository) Delete(ctx context.Context, id uuid.UUID) error {
 
 // RemoveEventOccurrencesFromRedis removes all scheduled occurrences for an event from Redis
 func (r *EventRepository) RemoveEventOccurrencesFromRedis(ctx context.Context, eventID uuid.UUID) error {
-	results, err := r.redis.ZRange(ctx, "schedules", 0, -1).Result()
+	results, err := r.redis.ZRange(ctx, r.redisPrefix+"schedules", 0, -1).Result()
 	if err != nil {
 		return err
 	}
 	for _, key := range results {
 		// Fetch the schedule data from the hash
-		data, err := r.redis.HGet(ctx, "schedule:data", key).Result()
+		data, err := r.redis.HGet(ctx, r.redisPrefix+"schedule:data", key).Result()
 		if err != nil {
 			continue // skip if not found or error
 		}
@@ -192,8 +193,8 @@ func (r *EventRepository) RemoveEventOccurrencesFromRedis(ctx context.Context, e
 		}
 		if sched.EventID == eventID {
 			// Remove from both sorted set and hash
-			r.redis.ZRem(ctx, "schedules", key)
-			r.redis.HDel(ctx, "schedule:data", key)
+			r.redis.ZRem(ctx, r.redisPrefix+"schedules", key)
+			r.redis.HDel(ctx, r.redisPrefix+"schedule:data", key)
 		}
 	}
 	return nil

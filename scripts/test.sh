@@ -54,38 +54,49 @@ ALL_TEST_OUTPUT=""
 FAIL_OUTPUTS=""
 
 START_TIME=$(date +%s)
+
+# Accept optional test filter argument
+TEST_FILTER="$1"
+
 for PKG in $PKGS; do
   echo -e "\n=== Discovering subtests in $PKG ==="
   TEST_FILES=$(find $(go list -f '{{.Dir}}' $PKG) -name '*_test.go')
+  echo "  Found test files: $TEST_FILES"
   TESTS_TO_RUN=()
   > /tmp/test_names.txt
   for file in $TEST_FILES; do
     parent_lines=$(grep -nE '^func Test[A-Za-z0-9_]*\(' "$file")
-    parent_count=$(echo "$parent_lines" | wc -l | tr -d ' ')
-    i=0
-    echo "$parent_lines" | while read -r line; do
+    echo "    Scanning $file for test functions..."
+    IFS=$'\n' read -rd '' -a parent_lines_arr <<<"$parent_lines"
+    parent_count=${#parent_lines_arr[@]}
+    for ((i=0; i<parent_count; i++)); do
+      line="${parent_lines_arr[$i]}"
       parent_line=$(echo "$line" | cut -d: -f1)
       parent_name=$(echo "$line" | sed -E 's/^.*func (Test[A-Za-z0-9_]*)\(.*$/\1/')
-      next_parent_line=$(echo "$parent_lines" | awk "NR==$((i+2))" | cut -d: -f1)
-      if [ -n "$next_parent_line" ]; then
+      if (( i+1 < parent_count )); then
+        next_parent_line=$(echo "${parent_lines_arr[$((i+1))]}" | cut -d: -f1)
         subtest_lines=$(sed -n "$((parent_line+1)),$((next_parent_line-1))p" "$file")
       else
-        subtest_lines=$(tail -n +"$((parent_line+1))" "$file")
+        subtest_lines=$(tail -n +$((parent_line+1)) "$file")
       fi
-      subtests=$(echo "$subtest_lines" | grep -oE 't.Run\("([^"]+)"' | sed -E 's/t.Run\("([^"]+)"$/\1/')
+      # Extract subtest names cleanly
+      subtests=$(echo "$subtest_lines" | grep -oE 't.Run\("[^"]+"' | sed -E 's/t.Run\("([^"]+)"/\1/')
       if [ -z "$subtests" ]; then
         echo "$parent_name" >> /tmp/test_names.txt
+        echo "      Found test: $parent_name"
       else
         while read -r sub; do
-          [ -n "$sub" ] && echo "$parent_name/$sub" >> /tmp/test_names.txt
+          [ -n "$sub" ] && echo "$parent_name/$sub" >> /tmp/test_names.txt && echo "      Found subtest: $parent_name/$sub"
         done <<< "$subtests"
       fi
-      i=$((i+1))
     done
   done
   TESTS_TO_RUN=()
   while read -r testname; do
-    TESTS_TO_RUN+=("$testname")
+    # If TEST_FILTER is set, only add matching tests
+    if [ -z "$TEST_FILTER" ] || [[ "$testname" == *"$TEST_FILTER"* ]]; then
+      TESTS_TO_RUN+=("$testname")
+    fi
   done < /tmp/test_names.txt
   if [ ${#TESTS_TO_RUN[@]} -eq 0 ]; then
     echo "No test or subtest functions found in $PKG, skipping."

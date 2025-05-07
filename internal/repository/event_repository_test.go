@@ -32,7 +32,8 @@ func TestEventRepository(t *testing.T) {
 	db := testutils.TestDB(t)
 	logger := zap.NewNop()
 	redisClient := testutils.TestRedis(t)
-	repo := NewEventRepository(db, logger, redisClient)
+	namespace := testutils.GetRedisNamespace()
+	repo := NewEventRepository(db, logger, redisClient, namespace)
 
 	// Add cleanup function
 	cleanup := func() {
@@ -398,7 +399,8 @@ func TestDeleteOldEvents(t *testing.T) {
 
 	logger := zap.NewNop()
 	redisClient := testutils.TestRedis(t)
-	repo := NewEventRepository(db, logger, redisClient)
+	namespace := testutils.GetRedisNamespace()
+	repo := NewEventRepository(db, logger, redisClient, namespace)
 	ctx := context.Background()
 
 	// Create test data
@@ -467,7 +469,8 @@ func TestDeleteOldOccurrences(t *testing.T) {
 
 	logger := zap.NewNop()
 	redisClient := testutils.TestRedis(t)
-	repo := NewEventRepository(db, logger, redisClient)
+	namespace := testutils.GetRedisNamespace()
+	repo := NewEventRepository(db, logger, redisClient, namespace)
 	ctx := context.Background()
 
 	// Create test event
@@ -544,6 +547,7 @@ func TestArchiveOldData(t *testing.T) {
 
 	logger := zap.NewNop()
 	redisClient := testutils.TestRedis(t)
+	namespace := testutils.GetRedisNamespace()
 
 	// Insert an old event and occurrence
 	oldEvent := &models.Event{
@@ -558,7 +562,7 @@ func TestArchiveOldData(t *testing.T) {
 		Status:      models.EventStatusActive,
 		CreatedAt:   time.Now().Add(-48 * time.Hour),
 	}
-	eventRepo := NewEventRepository(db, logger, redisClient)
+	eventRepo := NewEventRepository(db, logger, redisClient, namespace)
 	err := eventRepo.Create(ctx, oldEvent)
 	require.NoError(t, err)
 

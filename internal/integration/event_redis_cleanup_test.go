@@ -25,7 +25,8 @@ func TestEventRepository_RedisCleanupOnDelete(t *testing.T) {
 	logger := zap.NewNop()
 	// Use a real DB for event repo, but test Redis
 	db := testutils.TestDB(t)
-	repo := repository.NewEventRepository(db, logger, redisClient)
+	namespace := testutils.GetRedisNamespace()
+	repo := repository.NewEventRepository(db, logger, redisClient, namespace)
 
 	// Create event and schedule occurrences in Redis (inline logic)
 	event := &models.Event{
@@ -65,17 +66,17 @@ func TestEventRepository_RedisCleanupOnDelete(t *testing.T) {
 		require.NoError(t, err)
 		key := "schedule:" + event.ID.String() + ":" + fmt.Sprintf("%d", occ.ScheduledAt.Unix())
 		score := float64(occ.ScheduledAt.UnixMilli())
-		_, err = redisClient.ZAdd(ctx, "schedules", redis.Z{
+		_, err = redisClient.ZAdd(ctx, namespace+"schedules", redis.Z{
 			Score:  score,
 			Member: key,
 		}).Result()
 		require.NoError(t, err)
-		_, err = redisClient.HSet(ctx, "schedule:data", key, data).Result()
+		_, err = redisClient.HSet(ctx, namespace+"schedule:data", key, data).Result()
 		require.NoError(t, err)
 	}
 
 	// Ensure occurrences are in Redis
-	results, err := redisClient.ZRange(ctx, "schedules", 0, -1).Result()
+	results, err := redisClient.ZRange(ctx, namespace+"schedules", 0, -1).Result()
 	require.NoError(t, err)
 	assert.NotEmpty(t, results)
 
@@ -84,11 +85,11 @@ func TestEventRepository_RedisCleanupOnDelete(t *testing.T) {
 	require.NoError(t, err)
 
 	// Ensure occurrences for this event are removed from Redis
-	results, err = redisClient.ZRange(ctx, "schedules", 0, -1).Result()
+	results, err = redisClient.ZRange(ctx, namespace+"schedules", 0, -1).Result()
 	require.NoError(t, err)
 	for _, res := range results {
 		// Fetch from hash instead of decoding directly
-		data, err := redisClient.HGet(ctx, "schedule:data", res).Result()
+		data, err := redisClient.HGet(ctx, namespace+"schedule:data", res).Result()
 		if err != nil {
 			continue // skip if not found
 		}

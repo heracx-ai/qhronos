@@ -19,6 +19,8 @@ const (
 type Frequency string
 
 const (
+	FrequencyMinute  Frequency = "minute"
+	FrequencyHour    Frequency = "hour"
 	FrequencyDaily   Frequency = "daily"
 	FrequencyWeekly  Frequency = "weekly"
 	FrequencyMonthly Frequency = "monthly"
@@ -75,7 +77,7 @@ func ParseSchedule(scheduleStr string, logger *zap.Logger) (*Schedule, error) {
 func (s *Schedule) Validate() error {
 	// Validate frequency
 	switch s.Frequency {
-	case FrequencyDaily, FrequencyWeekly, FrequencyMonthly, FrequencyYearly:
+	case FrequencyMinute, FrequencyHour, FrequencyDaily, FrequencyWeekly, FrequencyMonthly, FrequencyYearly:
 	default:
 		return fmt.Errorf("invalid frequency: %s", s.Frequency)
 	}
@@ -148,6 +150,10 @@ func (s *Schedule) GetNextOccurrences(startTime time.Time, endTime time.Time, lo
 
 		// Move to next interval
 		switch s.Frequency {
+		case FrequencyMinute:
+			current = current.Add(time.Duration(s.Interval) * time.Minute)
+		case FrequencyHour:
+			current = current.Add(time.Duration(s.Interval) * time.Hour)
 		case FrequencyDaily:
 			current = current.AddDate(0, 0, s.Interval)
 		case FrequencyWeekly:
