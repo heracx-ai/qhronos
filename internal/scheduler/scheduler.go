@@ -177,9 +177,9 @@ func (s *Scheduler) calculateNextOccurrence(event *models.Event) (*time.Time, er
 	// Handle different frequencies
 	var nextTime time.Time
 	switch schedule.Frequency {
-	case "minute":
+	case "minutely":
 		nextTime = event.StartTime.Add(time.Duration(schedule.Interval) * time.Minute)
-	case "hour":
+	case "hourly":
 		nextTime = event.StartTime.Add(time.Duration(schedule.Interval) * time.Hour)
 	case "daily":
 		nextTime = event.StartTime.AddDate(0, 0, schedule.Interval)
@@ -190,30 +190,10 @@ func (s *Scheduler) calculateNextOccurrence(event *models.Event) (*time.Time, er
 	case "yearly":
 		nextTime = event.StartTime.AddDate(schedule.Interval, 0, 0)
 	default:
-		return nil, fmt.Errorf("invalid frequency: %s", schedule.Frequency)
+		return nil, fmt.Errorf("unsupported frequency: %s", schedule.Frequency)
 	}
-
-	// Check if we've exceeded count
-	if schedule.Count != nil {
-		// TODO: Implement count check
-		return nil, nil
-	}
-
-	// Check if we've exceeded until date
-	if schedule.Until != nil {
-		untilTime, err := time.Parse(time.RFC3339, *schedule.Until)
-		if err != nil {
-			return nil, fmt.Errorf("invalid until date: %w", err)
-		}
-		if nextTime.After(untilTime) {
-			return nil, nil
-		}
-	}
-
-	// Check if the next occurrence is in the past
 	if nextTime.Before(now) {
-		return nil, nil
+		nextTime = now
 	}
-
 	return &nextTime, nil
 }

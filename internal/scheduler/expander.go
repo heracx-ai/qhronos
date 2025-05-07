@@ -130,13 +130,13 @@ func (e *Expander) expandRecurringEvent(ctx context.Context, event *models.Event
 
 	// Calculate occurrences based on frequency
 	switch schedule.Frequency {
-	case "minute":
+	case "minutely":
 		for t := startTime; t.Before(endTime); t = t.Add(time.Duration(schedule.Interval) * time.Minute) {
 			if t.After(graceStart) {
 				occurrences = append(occurrences, t)
 			}
 		}
-	case "hour":
+	case "hourly":
 		for t := startTime; t.Before(endTime); t = t.Add(time.Duration(schedule.Interval) * time.Hour) {
 			if t.After(graceStart) {
 				occurrences = append(occurrences, t)

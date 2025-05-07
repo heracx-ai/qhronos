@@ -328,4 +328,60 @@ func TestEventExpander(t *testing.T) {
 		assert.Contains(t, scheduledDays, time.Wednesday)
 		assert.NotContains(t, scheduledDays, time.Monday)
 	})
+
+	t.Run("minutely frequency event expansion", func(t *testing.T) {
+		cleanup()
+		startTime := time.Now().Truncate(time.Minute)
+		scheduleConfig := &models.ScheduleConfig{
+			Frequency: "minutely",
+			Interval:  2,
+		}
+		event := &models.Event{
+			ID:          uuid.New(),
+			Name:        "Minutely Event",
+			Description: "Every 2 minutes",
+			StartTime:   startTime,
+			Webhook:     "http://example.com",
+			Schedule:    scheduleConfig,
+			Status:      models.EventStatusActive,
+			Metadata:    []byte(`{"key": "value"}`),
+			Tags:        pq.StringArray{"test"},
+			CreatedAt:   time.Now(),
+		}
+		err := eventRepo.Create(ctx, event)
+		require.NoError(t, err)
+		err = expander.ExpandEvents(ctx)
+		require.NoError(t, err)
+		results, err := redisClient.ZRange(ctx, namespace+ScheduleKey, 0, -1).Result()
+		require.NoError(t, err)
+		assert.NotEmpty(t, results)
+	})
+
+	t.Run("hourly frequency event expansion", func(t *testing.T) {
+		cleanup()
+		startTime := time.Now().Truncate(time.Hour)
+		scheduleConfig := &models.ScheduleConfig{
+			Frequency: "hourly",
+			Interval:  3,
+		}
+		event := &models.Event{
+			ID:          uuid.New(),
+			Name:        "Hourly Event",
+			Description: "Every 3 hours",
+			StartTime:   startTime,
+			Webhook:     "http://example.com",
+			Schedule:    scheduleConfig,
+			Status:      models.EventStatusActive,
+			Metadata:    []byte(`{"key": "value"}`),
+			Tags:        pq.StringArray{"test"},
+			CreatedAt:   time.Now(),
+		}
+		err := eventRepo.Create(ctx, event)
+		require.NoError(t, err)
+		err = expander.ExpandEvents(ctx)
+		require.NoError(t, err)
+		results, err := redisClient.ZRange(ctx, namespace+ScheduleKey, 0, -1).Result()
+		require.NoError(t, err)
+		assert.NotEmpty(t, results)
+	})
 }
