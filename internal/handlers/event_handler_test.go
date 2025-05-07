@@ -32,7 +32,7 @@ func TestEventHandler(t *testing.T) {
 	redisClient := testutils.TestRedis(t)
 	// Use test namespace for Redis keys in tests
 	namespace := testutils.GetRedisNamespace()
-	eventRepo := repository.NewEventRepository(db, logger, redisClient)
+	eventRepo := repository.NewEventRepository(db, logger, redisClient, namespace)
 	occurrenceRepo := repository.NewOccurrenceRepository(db, logger)
 	schedulerService := scheduler.NewScheduler(redisClient, logger, namespace)
 	expander := scheduler.NewExpander(

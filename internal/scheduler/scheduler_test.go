@@ -26,7 +26,7 @@ func TestScheduler(t *testing.T) {
 		db := testutils.TestDB(t)
 		logger := zap.NewNop()
 		redisClient := testutils.TestRedis(t)
-		eventRepo := repository.NewEventRepository(db, logger, redisClient)
+		eventRepo := repository.NewEventRepository(db, logger, redisClient, namespace)
 		occurrenceRepo := repository.NewOccurrenceRepository(db, logger)
 		scheduler := NewScheduler(redisClient, logger, namespace)
 		ctx := context.Background()

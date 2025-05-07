@@ -21,9 +21,9 @@ func TestEventExpander(t *testing.T) {
 	db := testutils.TestDB(t)
 	logger := zap.NewNop()
 	redisClient := testutils.TestRedis(t)
-	eventRepo := repository.NewEventRepository(db, logger, redisClient)
-	occurrenceRepo := repository.NewOccurrenceRepository(db, logger)
 	namespace := testutils.GetRedisNamespace()
+	eventRepo := repository.NewEventRepository(db, logger, redisClient, namespace)
+	occurrenceRepo := repository.NewOccurrenceRepository(db, logger)
 	scheduler := NewScheduler(redisClient, logger, namespace)
 
 	// Add cleanup function
@@ -82,13 +82,13 @@ func TestEventExpander(t *testing.T) {
 		require.NoError(t, err)
 
 		// Get all events from Redis sorted set
-		results, err := redisClient.ZRange(ctx, ScheduleKey, 0, -1).Result()
+		results, err := redisClient.ZRange(ctx, namespace+ScheduleKey, 0, -1).Result()
 		require.NoError(t, err)
 		assert.NotEmpty(t, results)
 
 		// Verify at least one occurrence was created
 		var occurrence models.Occurrence
-		data, err := redisClient.HGet(ctx, "schedule:data", results[0]).Result()
+		data, err := redisClient.HGet(ctx, namespace+"schedule:data", results[0]).Result()
 		require.NoError(t, err)
 		err = json.Unmarshal([]byte(data), &occurrence)
 		require.NoError(t, err)
@@ -102,7 +102,7 @@ func TestEventExpander(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify no occurrences were created
-		results, err := redisClient.ZRange(ctx, ScheduleKey, 0, -1).Result()
+		results, err := redisClient.ZRange(ctx, namespace+ScheduleKey, 0, -1).Result()
 		require.NoError(t, err)
 		assert.Empty(t, results)
 	})
@@ -131,13 +131,13 @@ func TestEventExpander(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify one occurrence was created in Redis
-		results, err := redisClient.ZRange(ctx, ScheduleKey, 0, -1).Result()
+		results, err := redisClient.ZRange(ctx, namespace+ScheduleKey, 0, -1).Result()
 		require.NoError(t, err)
 		assert.Len(t, results, 1)
 
 		// Verify the occurrence is for the correct event and scheduled at the correct time
 		var occurrence models.Occurrence
-		data, err := redisClient.HGet(ctx, "schedule:data", results[0]).Result()
+		data, err := redisClient.HGet(ctx, namespace+"schedule:data", results[0]).Result()
 		require.NoError(t, err)
 		err = json.Unmarshal([]byte(data), &occurrence)
 		require.NoError(t, err)
@@ -169,13 +169,13 @@ func TestEventExpander(t *testing.T) {
 		require.NoError(t, err)
 
 		// Get all occurrences from Redis sorted set
-		results, err := redisClient.ZRange(ctx, ScheduleKey, 0, -1).Result()
+		results, err := redisClient.ZRange(ctx, namespace+ScheduleKey, 0, -1).Result()
 		require.NoError(t, err)
 		assert.Len(t, results, 1)
 
 		// Verify the occurrence is for the correct event and scheduled at the correct time
 		var occurrence models.Occurrence
-		data, err := redisClient.HGet(ctx, "schedule:data", results[0]).Result()
+		data, err := redisClient.HGet(ctx, namespace+"schedule:data", results[0]).Result()
 		require.NoError(t, err)
 		err = json.Unmarshal([]byte(data), &occurrence)
 		require.NoError(t, err)
@@ -222,11 +222,11 @@ func TestEventExpander(t *testing.T) {
 		require.NoError(t, err)
 
 		// Get all scheduled occurrences from Redis
-		results, err := redisClient.ZRange(ctx, ScheduleKey, 0, -1).Result()
+		results, err := redisClient.ZRange(ctx, namespace+ScheduleKey, 0, -1).Result()
 		require.NoError(t, err)
 		var scheduledMondays []time.Time
 		for _, key := range results {
-			data, err := redisClient.HGet(ctx, "schedule:data", key).Result()
+			data, err := redisClient.HGet(ctx, namespace+"schedule:data", key).Result()
 			require.NoError(t, err)
 			var sched models.Schedule
 			err = json.Unmarshal([]byte(data), &sched)
@@ -280,11 +280,11 @@ func TestEventExpander(t *testing.T) {
 		require.NoError(t, err)
 
 		// Check that Monday is scheduled
-		results, err := redisClient.ZRange(ctx, ScheduleKey, 0, -1).Result()
+		results, err := redisClient.ZRange(ctx, namespace+ScheduleKey, 0, -1).Result()
 		require.NoError(t, err)
 		var scheduledDays []time.Weekday
 		for _, key := range results {
-			data, err := redisClient.HGet(ctx, "schedule:data", key).Result()
+			data, err := redisClient.HGet(ctx, namespace+"schedule:data", key).Result()
 			require.NoError(t, err)
 			var sched models.Schedule
 			err = json.Unmarshal([]byte(data), &sched)
@@ -312,11 +312,11 @@ func TestEventExpander(t *testing.T) {
 		require.NoError(t, err)
 
 		// Check that only Wednesday is scheduled
-		results, err = redisClient.ZRange(ctx, ScheduleKey, 0, -1).Result()
+		results, err = redisClient.ZRange(ctx, namespace+ScheduleKey, 0, -1).Result()
 		require.NoError(t, err)
 		scheduledDays = scheduledDays[:0]
 		for _, key := range results {
-			data, err := redisClient.HGet(ctx, "schedule:data", key).Result()
+			data, err := redisClient.HGet(ctx, namespace+"schedule:data", key).Result()
 			require.NoError(t, err)
 			var sched models.Schedule
 			err = json.Unmarshal([]byte(data), &sched)

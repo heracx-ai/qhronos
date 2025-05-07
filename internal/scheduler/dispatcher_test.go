@@ -76,12 +76,12 @@ func TestDispatcher(t *testing.T) {
 	db := testutils.TestDB(t)
 	logger, _ := zap.NewDevelopment()
 	redisClient := testutils.TestRedis(t)
-	eventRepo := repository.NewEventRepository(db, logger, redisClient)
+	namespace := testutils.GetRedisNamespace()
+	eventRepo := repository.NewEventRepository(db, logger, redisClient, namespace)
 	occurrenceRepo := repository.NewOccurrenceRepository(db, logger)
 	hmacService := services.NewHMACService("test-secret")
 	mockHTTP := new(MockHTTPClient)
 
-	namespace := testutils.GetRedisNamespace()
 	scheduler := NewScheduler(redisClient, logger, namespace)
 	dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, nil, scheduler)
 	dispatcher.SetHTTPClient(mockHTTP)
@@ -311,7 +311,7 @@ func TestDispatcher(t *testing.T) {
 		}
 		data, err := json.Marshal(schedule)
 		require.NoError(t, err)
-		err = redisClient.RPush(ctx, dispatchQueueKey, data).Err()
+		err = redisClient.RPush(ctx, namespace+dispatchQueueKey, data).Err()
 		require.NoError(t, err)
 		// Run the worker for a short time to process retries
 		runWorkerAndWait(ctx, dispatcher, scheduler, 20*time.Millisecond)
@@ -362,11 +362,11 @@ func TestDispatcher_RedisOnlyDispatch(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 	redisClient := testutils.TestRedis(t)
 	redisClient.FlushAll(ctx)
-	eventRepo := repository.NewEventRepository(db, logger, redisClient)
+	namespace := testutils.GetRedisNamespace()
+	eventRepo := repository.NewEventRepository(db, logger, redisClient, namespace)
 	occurrenceRepo := repository.NewOccurrenceRepository(db, logger)
 	hmacService := services.NewHMACService("test-secret")
 	mockHTTP := new(MockHTTPClient)
-	namespace := testutils.GetRedisNamespace()
 	scheduler := NewScheduler(redisClient, logger, namespace)
 	dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, nil, scheduler)
 	dispatcher.SetHTTPClient(mockHTTP)
@@ -437,11 +437,11 @@ func TestDispatcher_GetDueSchedules(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 	redisClient := testutils.TestRedis(t)
 	redisClient.FlushAll(ctx)
-	eventRepo := repository.NewEventRepository(db, logger, redisClient)
+	namespace := testutils.GetRedisNamespace()
+	eventRepo := repository.NewEventRepository(db, logger, redisClient, namespace)
 	occurrenceRepo := repository.NewOccurrenceRepository(db, logger)
 	hmacService := services.NewHMACService("test-secret")
 	mockHTTP := new(MockHTTPClient)
-	namespace := testutils.GetRedisNamespace()
 	scheduler := NewScheduler(redisClient, logger, namespace)
 	dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, nil, scheduler)
 	dispatcher.SetHTTPClient(mockHTTP)
@@ -480,7 +480,7 @@ func TestDispatcher_GetDueSchedules(t *testing.T) {
 	fmt.Printf("[DEBUG] Due schedules before dispatcher: %d\n", count)
 
 	// Debug: Print contents of dispatch queue after GetDueSchedules
-	items, err := redisClient.LRange(ctx, dispatchQueueKey, 0, -1).Result()
+	items, err := redisClient.LRange(ctx, namespace+dispatchQueueKey, 0, -1).Result()
 	if err != nil {
 		t.Fatalf("Error reading dispatch queue: %v", err)
 	}
@@ -531,11 +531,11 @@ func TestDispatcher_DispatchQueueWorker(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 	redisClient := testutils.TestRedis(t)
 	redisClient.FlushAll(ctx)
-	eventRepo := repository.NewEventRepository(db, logger, redisClient)
+	namespace := testutils.GetRedisNamespace()
+	eventRepo := repository.NewEventRepository(db, logger, redisClient, namespace)
 	occurrenceRepo := repository.NewOccurrenceRepository(db, logger)
 	hmacService := services.NewHMACService("test-secret")
 	mockHTTP := new(MockHTTPClient)
-	namespace := testutils.GetRedisNamespace()
 	scheduler := NewScheduler(redisClient, logger, namespace)
 	dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, nil, scheduler)
 	dispatcher.SetHTTPClient(mockHTTP)
@@ -588,17 +588,17 @@ func TestDispatcher_DispatchQueueWorker(t *testing.T) {
 		}
 		data, err := json.Marshal(sched)
 		require.NoError(t, err)
-		err = redisClient.RPush(ctx, dispatchQueueKey, data).Err()
+		err = redisClient.RPush(ctx, namespace+dispatchQueueKey, data).Err()
 		require.NoError(t, err)
 
 		// Run worker and wait for completion
 		runWorkerAndWait(ctx, dispatcher, scheduler, 3*time.Second)
 
 		// After worker runs, dispatch queue and retry queue should be empty
-		items, err := redisClient.LRange(ctx, dispatchQueueKey, 0, -1).Result()
+		items, err := redisClient.LRange(ctx, namespace+dispatchQueueKey, 0, -1).Result()
 		require.NoError(t, err)
 		assert.Len(t, items, 0)
-		retryItems, err := redisClient.ZRange(ctx, retryQueueKey, 0, -1).Result()
+		retryItems, err := redisClient.ZRange(ctx, namespace+retryQueueKey, 0, -1).Result()
 		require.NoError(t, err)
 		assert.Len(t, retryItems, 0)
 	})
@@ -642,12 +642,12 @@ func TestDispatcher_DispatchQueueWorker(t *testing.T) {
 		}
 		data, err := json.Marshal(sched)
 		require.NoError(t, err)
-		pushRes, err := redisClient.RPush(ctx, dispatchQueueKey, data).Result()
+		pushRes, err := redisClient.RPush(ctx, namespace+dispatchQueueKey, data).Result()
 		require.NoError(t, err)
 		fmt.Printf("[TEST DEBUG] RPush result: %v\n", pushRes)
 		time.Sleep(100 * time.Millisecond)
 		// Log the contents of the dispatch queue before starting the worker
-		items, err := redisClient.LRange(ctx, dispatchQueueKey, 0, -1).Result()
+		items, err := redisClient.LRange(ctx, namespace+dispatchQueueKey, 0, -1).Result()
 		require.NoError(t, err)
 		fmt.Printf("[TEST DEBUG] Dispatch queue before worker: %v\n", items)
 
@@ -656,7 +656,7 @@ func TestDispatcher_DispatchQueueWorker(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 
 		// Retry queue should have the item (since not yet max retries)
-		retryItems, err := redisClient.ZRange(ctx, retryQueueKey, 0, -1).Result()
+		retryItems, err := redisClient.ZRange(ctx, namespace+retryQueueKey, 0, -1).Result()
 		require.NoError(t, err)
 		assert.Len(t, retryItems, 1)
 	})
@@ -707,17 +707,17 @@ func TestDispatcher_DispatchQueueWorker(t *testing.T) {
 		}
 		data, err := json.Marshal(sched)
 		require.NoError(t, err)
-		err = redisClient.RPush(ctx, dispatchQueueKey, data).Err()
+		err = redisClient.RPush(ctx, namespace+dispatchQueueKey, data).Err()
 		require.NoError(t, err)
 
 		// Run worker and wait for enough time for maxRetries (2 seconds is more than enough now)
 		runWorkerAndWait(ctx, dispatcher, scheduler, 2*time.Second)
 
 		// After max retries, both dispatch and retry queues should be empty
-		items, err := redisClient.LRange(ctx, dispatchQueueKey, 0, -1).Result()
+		items, err := redisClient.LRange(ctx, namespace+dispatchQueueKey, 0, -1).Result()
 		require.NoError(t, err)
 		assert.Len(t, items, 0)
-		retryItems, err := redisClient.ZRange(ctx, retryQueueKey, 0, -1).Result()
+		retryItems, err := redisClient.ZRange(ctx, namespace+retryQueueKey, 0, -1).Result()
 		require.NoError(t, err)
 		assert.Len(t, retryItems, 0)
 	})

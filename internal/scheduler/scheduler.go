@@ -177,6 +177,10 @@ func (s *Scheduler) calculateNextOccurrence(event *models.Event) (*time.Time, er
 	// Handle different frequencies
 	var nextTime time.Time
 	switch schedule.Frequency {
+	case "minute":
+		nextTime = event.StartTime.Add(time.Duration(schedule.Interval) * time.Minute)
+	case "hour":
+		nextTime = event.StartTime.Add(time.Duration(schedule.Interval) * time.Hour)
 	case "daily":
 		nextTime = event.StartTime.AddDate(0, 0, schedule.Interval)
 	case "weekly":
