@@ -209,7 +209,7 @@ func main() {
 	wsHandler := handlers.NewWebSocketHandler(db)
 
 	// Initialize scheduler services
-	schedulerService := scheduler.NewScheduler(redisClient, logger)
+	schedulerService := scheduler.NewScheduler(redisClient, logger, "")
 	expander := scheduler.NewExpander(
 		schedulerService,
 		eventRepo,
