@@ -81,7 +81,8 @@ func TestDispatcher(t *testing.T) {
 	hmacService := services.NewHMACService("test-secret")
 	mockHTTP := new(MockHTTPClient)
 
-	scheduler := NewScheduler(redisClient, logger)
+	namespace := testutils.GetRedisNamespace()
+	scheduler := NewScheduler(redisClient, logger, namespace)
 	dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, nil, scheduler)
 	dispatcher.SetHTTPClient(mockHTTP)
 
@@ -365,12 +366,13 @@ func TestDispatcher_RedisOnlyDispatch(t *testing.T) {
 	occurrenceRepo := repository.NewOccurrenceRepository(db, logger)
 	hmacService := services.NewHMACService("test-secret")
 	mockHTTP := new(MockHTTPClient)
-	scheduler := NewScheduler(redisClient, logger)
+	namespace := testutils.GetRedisNamespace()
+	scheduler := NewScheduler(redisClient, logger, namespace)
 	dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, nil, scheduler)
 	dispatcher.SetHTTPClient(mockHTTP)
 
 	// Create Scheduler instance
-	scheduler = NewScheduler(redisClient, logger)
+	scheduler = NewScheduler(redisClient, logger, namespace)
 
 	// Create event and schedule, schedule in Redis
 	event := &models.Event{
@@ -439,12 +441,13 @@ func TestDispatcher_GetDueSchedules(t *testing.T) {
 	occurrenceRepo := repository.NewOccurrenceRepository(db, logger)
 	hmacService := services.NewHMACService("test-secret")
 	mockHTTP := new(MockHTTPClient)
-	scheduler := NewScheduler(redisClient, logger)
+	namespace := testutils.GetRedisNamespace()
+	scheduler := NewScheduler(redisClient, logger, namespace)
 	dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, nil, scheduler)
 	dispatcher.SetHTTPClient(mockHTTP)
 
 	// Create Scheduler instance
-	scheduler = NewScheduler(redisClient, logger)
+	scheduler = NewScheduler(redisClient, logger, namespace)
 
 	// Create event and schedule, schedule in Redis
 	event := &models.Event{
@@ -532,7 +535,8 @@ func TestDispatcher_DispatchQueueWorker(t *testing.T) {
 	occurrenceRepo := repository.NewOccurrenceRepository(db, logger)
 	hmacService := services.NewHMACService("test-secret")
 	mockHTTP := new(MockHTTPClient)
-	scheduler := NewScheduler(redisClient, logger)
+	namespace := testutils.GetRedisNamespace()
+	scheduler := NewScheduler(redisClient, logger, namespace)
 	dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, nil, scheduler)
 	dispatcher.SetHTTPClient(mockHTTP)
 

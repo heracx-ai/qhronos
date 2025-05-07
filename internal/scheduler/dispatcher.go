@@ -35,6 +35,7 @@ type Dispatcher struct {
 	logger         *zap.Logger
 	clientNotifier ClientNotifier // optional, for q: webhooks
 	scheduler      *Scheduler     // new field for scheduler
+	redisPrefix    string         // added redisPrefix field
 }
 
 // HTTPClient interface for mocking HTTP requests
@@ -62,6 +63,7 @@ func NewDispatcher(eventRepo *repository.EventRepository, occurrenceRepo *reposi
 		logger:         logger,
 		clientNotifier: clientNotifier,
 		scheduler:      scheduler,
+		redisPrefix:    scheduler.redisPrefix,
 	}
 }
 
@@ -77,8 +79,8 @@ func (d *Dispatcher) DispatchWebhook(ctx context.Context, sched *models.Schedule
 	if err != nil || event == nil {
 		key := fmt.Sprintf("schedule:%s:%d", sched.EventID.String(), sched.ScheduledAt.Unix())
 		if d.scheduler != nil && d.scheduler.redis != nil {
-			_, zremErr := d.scheduler.redis.ZRem(ctx, ScheduleKey, key).Result()
-			_, hdelErr := d.scheduler.redis.HDel(ctx, "schedule:data", key).Result()
+			_, zremErr := d.scheduler.redis.ZRem(ctx, d.scheduler.redisPrefix+ScheduleKey, key).Result()
+			_, hdelErr := d.scheduler.redis.HDel(ctx, d.scheduler.redisPrefix+"schedule:data", key).Result()
 			d.logger.Warn("Orphaned schedule found and removed",
 				zap.String("event_id", sched.EventID.String()),
 				zap.String("schedule_key", key),
@@ -245,7 +247,7 @@ return due
 			case <-ticker.C:
 				now := fmt.Sprintf("%f", float64(time.Now().Unix()))
 				// Use Lua script for atomic move
-				res, err := scheduler.redis.Eval(ctx, retryLua, []string{retryQueueKey, dispatchQueueKey}, now).Result()
+				res, err := scheduler.redis.Eval(ctx, retryLua, []string{d.scheduler.redisPrefix + retryQueueKey, d.scheduler.redisPrefix + dispatchQueueKey}, now).Result()
 				if err != nil {
 					d.logger.Error("[RETRY POLLER] Lua script failed", zap.Error(err))
 					continue
@@ -267,7 +269,7 @@ return due
 				d.logger.Debug("[DISPATCHER] Worker waiting for item", zap.Int("worker_id", workerID), zap.Time("ts", itemStart))
 				// Pop from dispatch queue (no processing queue)
 				popStart := time.Now()
-				data, err := scheduler.redis.BRPop(ctx, 5*time.Second, dispatchQueueKey).Result()
+				data, err := scheduler.redis.BRPop(ctx, 5*time.Second, d.scheduler.redisPrefix+dispatchQueueKey).Result()
 				popEnd := time.Now()
 				d.logger.Debug("[DISPATCHER] BRPop duration", zap.Int("worker_id", workerID), zap.Duration("duration", popEnd.Sub(popStart)), zap.Error(err))
 				if err == redis.Nil {
@@ -312,7 +314,7 @@ return due
 						nextRetry := time.Now().Add(d.retryDelay).Unix()
 						updatedData, _ := json.Marshal(sched)
 						d.logger.Debug("[DISPATCHER] Before ZAdd to retry queue", zap.Int("worker_id", workerID), zap.Time("ts", zaddStart))
-						err := scheduler.redis.ZAdd(ctx, retryQueueKey, redis.Z{
+						err := scheduler.redis.ZAdd(ctx, d.scheduler.redisPrefix+retryQueueKey, redis.Z{
 							Score:  float64(nextRetry),
 							Member: updatedData,
 						}).Err()

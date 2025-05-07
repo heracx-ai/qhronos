@@ -12,7 +12,7 @@ help:
 	@echo "Available targets:"
 	@echo "  build        Build the qhronosd binary"
 	@echo "  clean        Remove the qhronosd binary"
-	@echo "  test         Run the test script (requires docker-up)"
+	@echo "  test [name]  Run the test script (requires docker-up). Optionally pass a test or subtest name, e.g. 'make test TestScheduler/successful scheduling'"
 	@echo "  migrate-up   Run migrations up using scripts/migrate.sh"
 	@echo "  migrate-down Run migrations down using scripts/migrate.sh"
 	@echo "  migrate-clean-slate  Drop and recreate the database, then run all migrations from scratch"
@@ -28,7 +28,7 @@ clean:
 	rm -f $(BINARY_NAME)
 
 test:
-	bash scripts/test.sh
+	bash scripts/test.sh $(filter-out $@,$(MAKECMDGOALS))
 
 migrate-up:
 	bash scripts/migrate.sh up
@@ -56,3 +56,6 @@ redis-cleanup:
 
 docker-qup:
 	docker compose up -d postgres redis qhronosd
+
+%::
+	@:

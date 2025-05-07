@@ -23,7 +23,8 @@ func TestEventExpander(t *testing.T) {
 	redisClient := testutils.TestRedis(t)
 	eventRepo := repository.NewEventRepository(db, logger, redisClient)
 	occurrenceRepo := repository.NewOccurrenceRepository(db, logger)
-	scheduler := NewScheduler(redisClient, logger)
+	namespace := testutils.GetRedisNamespace()
+	scheduler := NewScheduler(redisClient, logger, namespace)
 
 	// Add cleanup function
 	cleanup := func() {

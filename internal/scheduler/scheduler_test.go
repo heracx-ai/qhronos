@@ -21,13 +21,14 @@ import (
 )
 
 func TestScheduler(t *testing.T) {
+	namespace := testutils.GetRedisNamespace()
 	cleanup := func() (*repository.EventRepository, *repository.OccurrenceRepository, *Scheduler, *zap.Logger, *testing.T, *redis.Client) {
 		db := testutils.TestDB(t)
 		logger := zap.NewNop()
 		redisClient := testutils.TestRedis(t)
 		eventRepo := repository.NewEventRepository(db, logger, redisClient)
 		occurrenceRepo := repository.NewOccurrenceRepository(db, logger)
-		scheduler := NewScheduler(redisClient, logger)
+		scheduler := NewScheduler(redisClient, logger, namespace)
 		ctx := context.Background()
 		_, err := db.ExecContext(ctx, "TRUNCATE TABLE events, occurrences CASCADE")
 		require.NoError(t, err)
@@ -131,7 +132,7 @@ func TestScheduler(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, 1, count)
 		// Check dispatch queue contents
-		items, err := redisClient.LRange(context.Background(), dispatchQueueKey, 0, -1).Result()
+		items, err := redisClient.LRange(context.Background(), namespace+dispatchQueueKey, 0, -1).Result()
 		require.NoError(t, err)
 		assert.Len(t, items, 1)
 		if len(items) == 0 {
@@ -207,7 +208,7 @@ func TestScheduler(t *testing.T) {
 		}
 
 		// Get all scheduled occurrences from Redis
-		results, err := redisClient.ZRange(ctx, ScheduleKey, 0, -1).Result()
+		results, err := redisClient.ZRange(ctx, namespace+ScheduleKey, 0, -1).Result()
 		require.NoError(t, err)
 		assert.Len(t, results, len(occurrences))
 
@@ -283,7 +284,7 @@ func TestScheduler(t *testing.T) {
 		require.NoError(t, err)
 
 		// There should be only one schedule in Redis
-		keys, err := redisClient.ZRange(context.Background(), ScheduleKey, 0, -1).Result()
+		keys, err := redisClient.ZRange(context.Background(), namespace+ScheduleKey, 0, -1).Result()
 		require.NoError(t, err)
 		assert.Len(t, keys, 1)
 	})
@@ -325,7 +326,7 @@ func TestScheduler(t *testing.T) {
 		assert.Equal(t, 1, count)
 
 		// Check dispatch queue contents
-		items, err := redisClient.LRange(context.Background(), dispatchQueueKey, 0, -1).Result()
+		items, err := redisClient.LRange(context.Background(), namespace+dispatchQueueKey, 0, -1).Result()
 		require.NoError(t, err)
 		assert.Len(t, items, 1)
 		if len(items) == 0 {
@@ -378,17 +379,18 @@ func TestScheduler(t *testing.T) {
 		assert.Equal(t, occ.OccurrenceID, sched.OccurrenceID)
 
 		// Queue should now be empty
-		items, err := redisClient.LRange(context.Background(), dispatchQueueKey, 0, -1).Result()
+		items, err := redisClient.LRange(context.Background(), namespace+dispatchQueueKey, 0, -1).Result()
 		require.NoError(t, err)
 		assert.Len(t, items, 0)
 	})
 }
 
 func TestScheduler_AtomicGetDueSchedules_NoDuplicates(t *testing.T) {
+	namespace := testutils.GetRedisNamespace()
 	ctx := context.Background()
 	redisClient := testutils.TestRedis(t)
 	redisClient.FlushAll(ctx)
-	scheduler := NewScheduler(redisClient, zap.NewNop())
+	scheduler := NewScheduler(redisClient, zap.NewNop(), namespace)
 
 	// Schedule 10 events due now
 	now := time.Now()
@@ -427,7 +429,7 @@ func TestScheduler_AtomicGetDueSchedules_NoDuplicates(t *testing.T) {
 	wg.Wait()
 
 	// Check that dispatch queue has exactly 10 unique items
-	items, err := redisClient.LRange(ctx, dispatchQueueKey, 0, -1).Result()
+	items, err := redisClient.LRange(ctx, namespace+dispatchQueueKey, 0, -1).Result()
 	require.NoError(t, err)
 	assert.Len(t, items, 10)
 
@@ -442,6 +444,7 @@ func TestScheduler_AtomicGetDueSchedules_NoDuplicates(t *testing.T) {
 }
 
 func TestScheduler_AtomicRetryPoller_NoDuplicates(t *testing.T) {
+	namespace := testutils.GetRedisNamespace()
 	ctx := context.Background()
 	redisClient := testutils.TestRedis(t)
 	redisClient.FlushAll(ctx)
@@ -477,7 +480,7 @@ func TestScheduler_AtomicRetryPoller_NoDuplicates(t *testing.T) {
 	data, err := json.Marshal(sched)
 	require.NoError(t, err)
 	// Add to retry queue, due now
-	_, err = redisClient.ZAdd(ctx, retryQueueKey, redis.Z{
+	_, err = redisClient.ZAdd(ctx, namespace+retryQueueKey, redis.Z{
 		Score:  float64(now.Unix()),
 		Member: data,
 	}).Result()
@@ -498,14 +501,14 @@ return due
 		go func() {
 			defer wg.Done()
 			nowStr := fmt.Sprintf("%f", float64(now.Unix()))
-			_, err := redisClient.Eval(ctx, retryLua, []string{retryQueueKey, dispatchQueueKey}, nowStr).Result()
+			_, err := redisClient.Eval(ctx, retryLua, []string{namespace + retryQueueKey, namespace + dispatchQueueKey}, nowStr).Result()
 			require.NoError(t, err)
 		}()
 	}
 	wg.Wait()
 
 	// Check that dispatch queue has exactly 1 item, no duplicates
-	items, err := redisClient.LRange(ctx, dispatchQueueKey, 0, -1).Result()
+	items, err := redisClient.LRange(ctx, namespace+dispatchQueueKey, 0, -1).Result()
 	require.NoError(t, err)
 	assert.Len(t, items, 1)
 }

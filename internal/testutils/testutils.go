@@ -61,4 +61,9 @@ func ReadMigrationSQL(t *testing.T) string {
 	}
 
 	return string(content)
-} 
+}
+
+// GetRedisNamespace returns the Redis namespace prefix for tests
+func GetRedisNamespace() string {
+	return GetEnv("TEST_REDIS_NAMESPACE", "test:")
+}
