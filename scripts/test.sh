@@ -41,9 +41,12 @@ BEGIN
 END
 $$;"
 
-# Run migrations
-echo "Running migrations..."
-cat migrations/001_initial_schema.sql | docker exec -i qhronos_db psql -U postgres -d qhronos_test
+# Run all migrations in order
+echo "Running all migrations..."
+for f in migrations/*.sql; do
+  echo "Applying migration $f"
+  cat "$f" | docker exec -i qhronos_db psql -U postgres -d qhronos_test
+done
 
 # List all internal packages
 PKGS=$(go list ./internal/...)
