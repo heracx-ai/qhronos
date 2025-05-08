@@ -58,6 +58,12 @@ func (h *EventHandler) CreateEvent(c *gin.Context) {
 		req.Tags = []string{}
 	}
 
+	// Validate start_time
+	if req.StartTime.Before(time.Now().UTC()) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Start time must be in the future"})
+		return
+	}
+
 	// Validate schedule format if provided
 	if req.Schedule != nil && !isValidSchedule(req.Schedule) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid schedule format"})
@@ -156,6 +162,12 @@ func (h *EventHandler) UpdateEvent(c *gin.Context) {
 	if req.Metadata != nil {
 		event.Metadata = req.Metadata
 	}
+	if req.StartTime != nil {
+		oldStartTime := event.StartTime
+		if oldStartTime != *req.StartTime && req.StartTime.Before(time.Now().UTC()) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Start time must be in the future"})
+		}
+	}
 	if req.Schedule != nil {
 		if !isValidSchedule(req.Schedule) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid schedule format"})
@@ -241,7 +253,7 @@ func isValidSchedule(schedule *models.ScheduleConfig) bool {
 
 	// Validate frequency
 	switch schedule.Frequency {
-	case "daily", "weekly", "monthly", "yearly":
+	case "minutely", "hourly", "daily", "weekly", "monthly", "yearly":
 		// Valid frequency
 	default:
 		return false

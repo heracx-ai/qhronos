@@ -59,5 +59,6 @@ docker-qup:
 
 docker-qdown:
 	docker compose down -d qhronosd redis postgres
+	
 %::
 	@:
