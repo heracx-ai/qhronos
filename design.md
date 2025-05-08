@@ -44,9 +44,9 @@ Qhronos is a developer-first, event scheduling and notification platform. It ena
        │
        ▼
    [Scheduler Layer] ──► [Redis]
-       │
+       │ (Core Scheduler, Expander, Dispatcher, Archival Scheduler)
        ▼
-   [Background Jobs: Expander, Dispatcher, Cleanup]
+   [Background Jobs: Expander, Dispatcher, Archival/Cleanup]
        │
        ▼
    [Webhook Delivery]
@@ -101,6 +101,8 @@ Qhronos uses JWT tokens and a master token for API authentication. Access contro
 ### Middleware
 - Cross-cutting concerns: logging, error handling, authentication, rate limiting
 - Ensures consistent request/response processing and security
+- **Ginzap Logger:** Uses `zap` for structured logging of HTTP requests and responses, including latency, status, etc., via `ginzap.Ginzap` and `ginzap.RecoveryWithZap`.
+- **RequestIDMiddleware:** Injects a unique request ID into the context and logs for improved traceability.
 
 ### Services
 - Encapsulate business logic not directly tied to HTTP or data access
@@ -112,11 +114,12 @@ Qhronos uses JWT tokens and a master token for API authentication. Access contro
 - Maps Go models to database tables
 
 ### Scheduler Layer
-- Background jobs for event expansion, webhook dispatch, and cleanup
-- Expander: generates occurrences for recurring events
-- Dispatcher: delivers webhooks for due occurrences, handles retries
-- Cleanup: archives old data and enforces retention policies
-- Uses Redis for coordination and scheduling
+- Background jobs for event expansion, webhook dispatch, and data archival.
+- Uses Redis for coordination and scheduling of tasks.
+- **Core Scheduler (`scheduler.Scheduler`):** Manages the underlying scheduling mechanism in Redis, providing a foundation for other scheduler components like the Expander and Dispatcher to enqueue and manage scheduled tasks.
+- **Expander (`scheduler.Expander`):** Periodically scans for recurring events. For each event, it computes the next set of occurrences based on the `look_ahead_duration` and `expansion_interval` settings and stores them (e.g., in Redis via the Core Scheduler, for the Dispatcher to pick up).
+- **Dispatcher (`scheduler.Dispatcher`):** Retrieves due occurrences from the schedule (e.g., Redis, managed by Core Scheduler). It attempts to deliver the webhook to the event's configured URL, signing with HMAC if configured. Handles retries with backoff on failure, up to a maximum attempt count.
+- **Archival Scheduler (`scheduler.ArchivalScheduler`):** Periodically archives old events, occurrences, and webhook attempts from the primary tables to archive tables based on configured retention policies and archival interval. This helps manage database size and performance.
 
 ### Models
 - Defines data structures for events, occurrences, tokens, and errors
@@ -163,7 +166,7 @@ Qhronos uses JWT tokens and a master token for API authentication. Access contro
 - Exceeding the limit results in a 429 response.
 
 ### Archiving & Retention
-- The Cleanup job periodically archives old events, occurrences, and webhook attempts based on retention policies.
+- The **Archival Scheduler** job periodically archives old events, occurrences, and webhook attempts based on retention policies.
 - Archived data is moved to separate tables for long-term storage.
 
 ### Health & Status Endpoints
@@ -184,7 +187,6 @@ While the schema includes tables for analytics and performance metrics, the curr
    |                        +----< archived_occurrences >
    +----< archived_events >
 
-[system_config] (global config)
 [analytics_daily], [analytics_hourly], [performance_metrics] (aggregates)
 ```
 
@@ -194,7 +196,6 @@ While the schema includes tables for analytics and performance metrics, the curr
 - **occurrences:** Each row represents a scheduled execution of an event, with status and delivery tracking.
 - **webhook_attempts:** Logs each attempt to deliver a webhook for an occurrence, including status and response.
 - **archived_events / archived_occurrences / archived_webhook_attempts:** Long-term storage for data past retention windows.
-- **system_config:** Stores global configuration and retention policies.
 - **analytics_daily / analytics_hourly / performance_metrics:** Tables for aggregated statistics and system performance. **Note:** These tables are present in the schema for future use. As of the current implementation, they are not yet populated or queried by the application logic. Enhanced analytics and reporting are planned for a future release.
 
 ## 7. API Reference
@@ -213,6 +214,7 @@ While the schema includes tables for analytics and performance metrics, the curr
 | POST   | /tokens               | Create a new JWT token (admin)     |
 | GET    | /status               | Service status and health info     |
 | GET    | /health               | Simple health check                |
+| WS     | /ws                   | Real-time event delivery via WebSocket |
 
 ### Request/Response Patterns
 - All endpoints use JSON for request and response bodies.

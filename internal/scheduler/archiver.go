@@ -2,7 +2,6 @@ package scheduler
 
 import (
 	"context"
-	"encoding/json"
 	"time"
 
 	"github.com/feedloop/qhronos/internal/config"
@@ -56,7 +55,7 @@ func updateLastArchivalTimeRedis(ctx context.Context, rdb *redis.Client, checkPe
 }
 
 func syncRetentionConfigToDB(db *sqlx.DB, durations config.RetentionDurations) error {
-	value := map[string]interface{}{
+	/*value := map[string]interface{}{
 		"events": map[string]interface{}{
 			"max_past_occurrences": durations.Events.String(),
 		},
@@ -73,7 +72,8 @@ func syncRetentionConfigToDB(db *sqlx.DB, durations config.RetentionDurations) e
 		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now(), updated_by = EXCLUDED.updated_by
 	`, "retention_policies", valueJSON, "Data retention policies", "system")
-	return err
+	return err*/
+	return nil // Prevent writing to system_config
 }
 
 func StartArchivalScheduler(db *sqlx.DB, rdb *redis.Client, checkPeriod time.Duration, durations config.RetentionDurations, stopCh <-chan struct{}, logger *zap.Logger) {

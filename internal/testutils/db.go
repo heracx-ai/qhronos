@@ -38,10 +38,10 @@ func TestDB(t testing.TB) *sqlx.DB {
 
 	// Check if migrations have already been run
 	var count int
-	err = db.GetContext(context.Background(), &count, "SELECT COUNT(*) FROM pg_tables WHERE tablename = 'system_config'")
+	err = db.GetContext(context.Background(), &count, "SELECT COUNT(*) FROM pg_tables WHERE tablename = 'events'")
 	if err != nil || count == 0 {
 		// Run migrations
-		migration, err := os.ReadFile("migrations/001_initial_schema.sql")
+		migration, err := os.ReadFile("../../migrations/001_initial_schema.sql")
 		if err != nil {
 			t.Fatalf("Could not read migration file: %s", err)
 		}
@@ -53,4 +53,4 @@ func TestDB(t testing.TB) *sqlx.DB {
 	}
 
 	return db
-} 
+}
