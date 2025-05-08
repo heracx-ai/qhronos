@@ -206,14 +206,14 @@ func main() {
 	defer redisClient.Close()
 
 	// Initialize repositories
-	eventRepo := repository.NewEventRepository(db, logger, redisClient)
+	eventRepo := repository.NewEventRepository(db, logger, redisClient, "")
 	occurrenceRepo := repository.NewOccurrenceRepository(db, logger)
 
 	// Initialize WebSocket handler (ClientNotifier)
 	wsHandler := handlers.NewWebSocketHandler(db)
 
 	// Initialize scheduler services
-	schedulerService := scheduler.NewScheduler(redisClient, logger)
+	schedulerService := scheduler.NewScheduler(redisClient, logger, "")
 	expander := scheduler.NewExpander(
 		schedulerService,
 		eventRepo,

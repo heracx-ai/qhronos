@@ -18,7 +18,8 @@ func TestOccurrenceRepository(t *testing.T) {
 	db := testutils.TestDB(t)
 	logger := zap.NewNop()
 	redisClient := testutils.TestRedis(t)
-	eventRepo := NewEventRepository(db, logger, redisClient)
+	namespace := testutils.GetRedisNamespace()
+	eventRepo := NewEventRepository(db, logger, redisClient, namespace)
 	repo := NewOccurrenceRepository(db, logger)
 
 	cleanup := func() {

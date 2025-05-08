@@ -19,14 +19,16 @@ const (
 )
 
 type Scheduler struct {
-	redis  *redis.Client
-	logger *zap.Logger
+	redis       *redis.Client
+	logger      *zap.Logger
+	redisPrefix string
 }
 
-func NewScheduler(redis *redis.Client, logger *zap.Logger) *Scheduler {
+func NewScheduler(redis *redis.Client, logger *zap.Logger, prefix string) *Scheduler {
 	return &Scheduler{
-		redis:  redis,
-		logger: logger,
+		redis:       redis,
+		logger:      logger,
+		redisPrefix: prefix,
 	}
 }
 
@@ -36,7 +38,7 @@ func (s *Scheduler) ScheduleEvent(ctx context.Context, occurrence *models.Occurr
 	key := fmt.Sprintf("schedule:%s:%d", event.ID.String(), occurrence.ScheduledAt.Unix())
 
 	// Check if already scheduled
-	exists, err := s.redis.HExists(ctx, "schedule:data", key).Result()
+	exists, err := s.redis.HExists(ctx, s.redisPrefix+"schedule:data", key).Result()
 	if err != nil {
 		return fmt.Errorf("failed to check schedule existence: %w", err)
 	}
@@ -60,14 +62,14 @@ func (s *Scheduler) ScheduleEvent(ctx context.Context, occurrence *models.Occurr
 
 	// Add to Redis sorted set and hash
 	score := float64(occurrence.ScheduledAt.Unix())
-	_, err = s.redis.ZAdd(ctx, ScheduleKey, redis.Z{
+	_, err = s.redis.ZAdd(ctx, s.redisPrefix+ScheduleKey, redis.Z{
 		Score:  score,
 		Member: key,
 	}).Result()
 	if err != nil {
 		return fmt.Errorf("failed to add schedule to sorted set: %w", err)
 	}
-	_, err = s.redis.HSet(ctx, "schedule:data", key, data).Result()
+	_, err = s.redis.HSet(ctx, s.redisPrefix+"schedule:data", key, data).Result()
 	if err != nil {
 		return fmt.Errorf("failed to add schedule to hash: %w", err)
 	}
@@ -93,7 +95,7 @@ return count
 `
 
 	now := fmt.Sprintf("%d", time.Now().Unix())
-	res, err := s.redis.Eval(ctx, scheduleLua, []string{ScheduleKey, "schedule:data", dispatchQueueKey}, now).Result()
+	res, err := s.redis.Eval(ctx, scheduleLua, []string{s.redisPrefix + ScheduleKey, s.redisPrefix + "schedule:data", s.redisPrefix + dispatchQueueKey}, now).Result()
 	if err != nil {
 		return 0, fmt.Errorf("failed to atomically move due schedules: %w", err)
 	}
@@ -105,7 +107,7 @@ return count
 
 // PopDispatchQueue pops a schedule from the dispatch queue (for worker use)
 func (s *Scheduler) PopDispatchQueue(ctx context.Context) (*models.Schedule, error) {
-	data, err := s.redis.LPop(ctx, dispatchQueueKey).Result()
+	data, err := s.redis.LPop(ctx, s.redisPrefix+dispatchQueueKey).Result()
 	if err == redis.Nil {
 		return nil, nil // No item
 	} else if err != nil {
@@ -121,11 +123,11 @@ func (s *Scheduler) PopDispatchQueue(ctx context.Context) (*models.Schedule, err
 // RemoveScheduledEvent removes a scheduled event from Redis (idempotent version)
 func (s *Scheduler) RemoveScheduledEvent(ctx context.Context, occurrence *models.Occurrence) error {
 	key := fmt.Sprintf("schedule:%s:%d", occurrence.EventID.String(), occurrence.ScheduledAt.Unix())
-	_, err := s.redis.ZRem(ctx, ScheduleKey, key).Result()
+	_, err := s.redis.ZRem(ctx, s.redisPrefix+ScheduleKey, key).Result()
 	if err != nil {
 		return fmt.Errorf("failed to remove schedule from sorted set: %w", err)
 	}
-	_, err = s.redis.HDel(ctx, "schedule:data", key).Result()
+	_, err = s.redis.HDel(ctx, s.redisPrefix+"schedule:data", key).Result()
 	if err != nil {
 		return fmt.Errorf("failed to remove schedule from hash: %w", err)
 	}
@@ -175,6 +177,10 @@ func (s *Scheduler) calculateNextOccurrence(event *models.Event) (*time.Time, er
 	// Handle different frequencies
 	var nextTime time.Time
 	switch schedule.Frequency {
+	case "minutely":
+		nextTime = event.StartTime.Add(time.Duration(schedule.Interval) * time.Minute)
+	case "hourly":
+		nextTime = event.StartTime.Add(time.Duration(schedule.Interval) * time.Hour)
 	case "daily":
 		nextTime = event.StartTime.AddDate(0, 0, schedule.Interval)
 	case "weekly":
@@ -184,30 +190,10 @@ func (s *Scheduler) calculateNextOccurrence(event *models.Event) (*time.Time, er
 	case "yearly":
 		nextTime = event.StartTime.AddDate(schedule.Interval, 0, 0)
 	default:
-		return nil, fmt.Errorf("invalid frequency: %s", schedule.Frequency)
+		return nil, fmt.Errorf("unsupported frequency: %s", schedule.Frequency)
 	}
-
-	// Check if we've exceeded count
-	if schedule.Count != nil {
-		// TODO: Implement count check
-		return nil, nil
-	}
-
-	// Check if we've exceeded until date
-	if schedule.Until != nil {
-		untilTime, err := time.Parse(time.RFC3339, *schedule.Until)
-		if err != nil {
-			return nil, fmt.Errorf("invalid until date: %w", err)
-		}
-		if nextTime.After(untilTime) {
-			return nil, nil
-		}
-	}
-
-	// Check if the next occurrence is in the past
 	if nextTime.Before(now) {
-		return nil, nil
+		nextTime = now
 	}
-
 	return &nextTime, nil
 }

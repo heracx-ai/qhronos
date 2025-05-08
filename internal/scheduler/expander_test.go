@@ -21,9 +21,10 @@ func TestEventExpander(t *testing.T) {
 	db := testutils.TestDB(t)
 	logger := zap.NewNop()
 	redisClient := testutils.TestRedis(t)
-	eventRepo := repository.NewEventRepository(db, logger, redisClient)
+	namespace := testutils.GetRedisNamespace()
+	eventRepo := repository.NewEventRepository(db, logger, redisClient, namespace)
 	occurrenceRepo := repository.NewOccurrenceRepository(db, logger)
-	scheduler := NewScheduler(redisClient, logger)
+	scheduler := NewScheduler(redisClient, logger, namespace)
 
 	// Add cleanup function
 	cleanup := func() {
@@ -81,13 +82,13 @@ func TestEventExpander(t *testing.T) {
 		require.NoError(t, err)
 
 		// Get all events from Redis sorted set
-		results, err := redisClient.ZRange(ctx, ScheduleKey, 0, -1).Result()
+		results, err := redisClient.ZRange(ctx, namespace+ScheduleKey, 0, -1).Result()
 		require.NoError(t, err)
 		assert.NotEmpty(t, results)
 
 		// Verify at least one occurrence was created
 		var occurrence models.Occurrence
-		data, err := redisClient.HGet(ctx, "schedule:data", results[0]).Result()
+		data, err := redisClient.HGet(ctx, namespace+"schedule:data", results[0]).Result()
 		require.NoError(t, err)
 		err = json.Unmarshal([]byte(data), &occurrence)
 		require.NoError(t, err)
@@ -101,7 +102,7 @@ func TestEventExpander(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify no occurrences were created
-		results, err := redisClient.ZRange(ctx, ScheduleKey, 0, -1).Result()
+		results, err := redisClient.ZRange(ctx, namespace+ScheduleKey, 0, -1).Result()
 		require.NoError(t, err)
 		assert.Empty(t, results)
 	})
@@ -130,13 +131,13 @@ func TestEventExpander(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify one occurrence was created in Redis
-		results, err := redisClient.ZRange(ctx, ScheduleKey, 0, -1).Result()
+		results, err := redisClient.ZRange(ctx, namespace+ScheduleKey, 0, -1).Result()
 		require.NoError(t, err)
 		assert.Len(t, results, 1)
 
 		// Verify the occurrence is for the correct event and scheduled at the correct time
 		var occurrence models.Occurrence
-		data, err := redisClient.HGet(ctx, "schedule:data", results[0]).Result()
+		data, err := redisClient.HGet(ctx, namespace+"schedule:data", results[0]).Result()
 		require.NoError(t, err)
 		err = json.Unmarshal([]byte(data), &occurrence)
 		require.NoError(t, err)
@@ -168,13 +169,13 @@ func TestEventExpander(t *testing.T) {
 		require.NoError(t, err)
 
 		// Get all occurrences from Redis sorted set
-		results, err := redisClient.ZRange(ctx, ScheduleKey, 0, -1).Result()
+		results, err := redisClient.ZRange(ctx, namespace+ScheduleKey, 0, -1).Result()
 		require.NoError(t, err)
 		assert.Len(t, results, 1)
 
 		// Verify the occurrence is for the correct event and scheduled at the correct time
 		var occurrence models.Occurrence
-		data, err := redisClient.HGet(ctx, "schedule:data", results[0]).Result()
+		data, err := redisClient.HGet(ctx, namespace+"schedule:data", results[0]).Result()
 		require.NoError(t, err)
 		err = json.Unmarshal([]byte(data), &occurrence)
 		require.NoError(t, err)
@@ -221,11 +222,11 @@ func TestEventExpander(t *testing.T) {
 		require.NoError(t, err)
 
 		// Get all scheduled occurrences from Redis
-		results, err := redisClient.ZRange(ctx, ScheduleKey, 0, -1).Result()
+		results, err := redisClient.ZRange(ctx, namespace+ScheduleKey, 0, -1).Result()
 		require.NoError(t, err)
 		var scheduledMondays []time.Time
 		for _, key := range results {
-			data, err := redisClient.HGet(ctx, "schedule:data", key).Result()
+			data, err := redisClient.HGet(ctx, namespace+"schedule:data", key).Result()
 			require.NoError(t, err)
 			var sched models.Schedule
 			err = json.Unmarshal([]byte(data), &sched)
@@ -279,11 +280,11 @@ func TestEventExpander(t *testing.T) {
 		require.NoError(t, err)
 
 		// Check that Monday is scheduled
-		results, err := redisClient.ZRange(ctx, ScheduleKey, 0, -1).Result()
+		results, err := redisClient.ZRange(ctx, namespace+ScheduleKey, 0, -1).Result()
 		require.NoError(t, err)
 		var scheduledDays []time.Weekday
 		for _, key := range results {
-			data, err := redisClient.HGet(ctx, "schedule:data", key).Result()
+			data, err := redisClient.HGet(ctx, namespace+"schedule:data", key).Result()
 			require.NoError(t, err)
 			var sched models.Schedule
 			err = json.Unmarshal([]byte(data), &sched)
@@ -311,11 +312,11 @@ func TestEventExpander(t *testing.T) {
 		require.NoError(t, err)
 
 		// Check that only Wednesday is scheduled
-		results, err = redisClient.ZRange(ctx, ScheduleKey, 0, -1).Result()
+		results, err = redisClient.ZRange(ctx, namespace+ScheduleKey, 0, -1).Result()
 		require.NoError(t, err)
 		scheduledDays = scheduledDays[:0]
 		for _, key := range results {
-			data, err := redisClient.HGet(ctx, "schedule:data", key).Result()
+			data, err := redisClient.HGet(ctx, namespace+"schedule:data", key).Result()
 			require.NoError(t, err)
 			var sched models.Schedule
 			err = json.Unmarshal([]byte(data), &sched)
@@ -326,5 +327,61 @@ func TestEventExpander(t *testing.T) {
 		}
 		assert.Contains(t, scheduledDays, time.Wednesday)
 		assert.NotContains(t, scheduledDays, time.Monday)
+	})
+
+	t.Run("minutely frequency event expansion", func(t *testing.T) {
+		cleanup()
+		startTime := time.Now().Truncate(time.Minute)
+		scheduleConfig := &models.ScheduleConfig{
+			Frequency: "minutely",
+			Interval:  2,
+		}
+		event := &models.Event{
+			ID:          uuid.New(),
+			Name:        "Minutely Event",
+			Description: "Every 2 minutes",
+			StartTime:   startTime,
+			Webhook:     "http://example.com",
+			Schedule:    scheduleConfig,
+			Status:      models.EventStatusActive,
+			Metadata:    []byte(`{"key": "value"}`),
+			Tags:        pq.StringArray{"test"},
+			CreatedAt:   time.Now(),
+		}
+		err := eventRepo.Create(ctx, event)
+		require.NoError(t, err)
+		err = expander.ExpandEvents(ctx)
+		require.NoError(t, err)
+		results, err := redisClient.ZRange(ctx, namespace+ScheduleKey, 0, -1).Result()
+		require.NoError(t, err)
+		assert.NotEmpty(t, results)
+	})
+
+	t.Run("hourly frequency event expansion", func(t *testing.T) {
+		cleanup()
+		startTime := time.Now().Truncate(time.Hour)
+		scheduleConfig := &models.ScheduleConfig{
+			Frequency: "hourly",
+			Interval:  3,
+		}
+		event := &models.Event{
+			ID:          uuid.New(),
+			Name:        "Hourly Event",
+			Description: "Every 3 hours",
+			StartTime:   startTime,
+			Webhook:     "http://example.com",
+			Schedule:    scheduleConfig,
+			Status:      models.EventStatusActive,
+			Metadata:    []byte(`{"key": "value"}`),
+			Tags:        pq.StringArray{"test"},
+			CreatedAt:   time.Now(),
+		}
+		err := eventRepo.Create(ctx, event)
+		require.NoError(t, err)
+		err = expander.ExpandEvents(ctx)
+		require.NoError(t, err)
+		results, err := redisClient.ZRange(ctx, namespace+ScheduleKey, 0, -1).Result()
+		require.NoError(t, err)
+		assert.NotEmpty(t, results)
 	})
 }

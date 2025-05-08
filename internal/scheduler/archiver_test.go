@@ -41,7 +41,8 @@ func TestArchivalScheduler(t *testing.T) {
 		Status:      models.EventStatusActive,
 		CreatedAt:   time.Now().Add(-48 * time.Hour),
 	}
-	eventRepo := repository.NewEventRepository(db, logger, redisClient)
+	namespace := testutils.GetRedisNamespace()
+	eventRepo := repository.NewEventRepository(db, logger, redisClient, namespace)
 	err = eventRepo.Create(ctx, oldEvent)
 	require.NoError(t, err)
 

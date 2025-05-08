@@ -25,7 +25,8 @@ func TestOccurrenceHandler(t *testing.T) {
 	db := testutils.TestDB(t)
 	logger := zap.NewNop()
 	redisClient := testutils.TestRedis(t)
-	eventRepo := repository.NewEventRepository(db, logger, redisClient)
+	namespace := testutils.GetRedisNamespace()
+	eventRepo := repository.NewEventRepository(db, logger, redisClient, namespace)
 	occurrenceRepo := repository.NewOccurrenceRepository(db, logger)
 	handler := NewOccurrenceHandler(eventRepo, occurrenceRepo)
 
