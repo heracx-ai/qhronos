@@ -1,15 +1,13 @@
 package scheduler
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"net/http"
-	"strings"
 	"time"
 
+	"github.com/feedloop/qhronos/internal/actions"
 	"github.com/feedloop/qhronos/internal/models"
 	"github.com/feedloop/qhronos/internal/repository"
 	"github.com/feedloop/qhronos/internal/services"
@@ -33,9 +31,10 @@ type Dispatcher struct {
 	maxRetries     int
 	retryDelay     time.Duration
 	logger         *zap.Logger
-	clientNotifier ClientNotifier // optional, for q: webhooks
-	scheduler      *Scheduler     // new field for scheduler
-	redisPrefix    string         // added redisPrefix field
+	clientNotifier ClientNotifier          // optional, for q: webhooks
+	scheduler      *Scheduler              // new field for scheduler
+	redisPrefix    string                  // added redisPrefix field
+	actionsManager *actions.ActionsManager // new field for actions manager
 }
 
 // HTTPClient interface for mocking HTTP requests
@@ -52,18 +51,29 @@ func (d *DefaultHTTPClient) Do(req *http.Request) (*http.Response, error) {
 	return d.client.Do(req)
 }
 
-func NewDispatcher(eventRepo *repository.EventRepository, occurrenceRepo *repository.OccurrenceRepository, hmacService *services.HMACService, logger *zap.Logger, maxRetries int, retryDelay time.Duration, clientNotifier ClientNotifier, scheduler *Scheduler) *Dispatcher {
+func NewDispatcher(eventRepo *repository.EventRepository, occurrenceRepo *repository.OccurrenceRepository, hmacService *services.HMACService, logger *zap.Logger, maxRetries int, retryDelay time.Duration, clientNotifier ClientNotifier, scheduler *Scheduler, httpClient HTTPClient) *Dispatcher {
+	am := actions.NewActionsManager()
+	var webhookClient HTTPClient
+	if httpClient != nil {
+		webhookClient = httpClient
+	} else {
+		webhookClient = &DefaultHTTPClient{client: &http.Client{Timeout: 10 * time.Second}}
+	}
+	am.Register(models.ActionTypeWebhook, actions.NewWebhookExecutor(hmacService, webhookClient))
+	am.Register(models.ActionTypeWebsocket, actions.NewWebsocketExecutor(clientNotifier))
+	am.Register(models.ActionTypeAPICall, actions.NewAPICallExecutor(webhookClient))
 	return &Dispatcher{
 		eventRepo:      eventRepo,
 		occurrenceRepo: occurrenceRepo,
 		hmacService:    hmacService,
-		client:         &DefaultHTTPClient{client: &http.Client{Timeout: 10 * time.Second}},
+		client:         webhookClient,
 		maxRetries:     maxRetries,
 		retryDelay:     retryDelay,
 		logger:         logger,
 		clientNotifier: clientNotifier,
 		scheduler:      scheduler,
 		redisPrefix:    scheduler.redisPrefix,
+		actionsManager: am,
 	}
 }
 
@@ -72,151 +82,107 @@ func (d *Dispatcher) SetHTTPClient(client HTTPClient) {
 	d.client = client
 }
 
-// DispatchWebhook sends a webhook request and handles a single attempt (no in-process retry)
-func (d *Dispatcher) DispatchWebhook(ctx context.Context, sched *models.Schedule) error {
-	// Defensive: Clean up orphaned schedule if event does not exist
+// DispatchAction sends a webhook request or dispatches a websocket message based on the event's action type.
+func (d *Dispatcher) DispatchAction(ctx context.Context, sched *models.Schedule) error {
+	// Fetch the full event details, as sched from Redis might be minimal
 	event, err := d.eventRepo.GetByID(ctx, sched.EventID)
-	if err != nil || event == nil {
+	if err != nil {
+		d.logger.Error("Failed to get event for dispatch", zap.String("event_id", sched.EventID.String()), zap.String("occurrence_id", sched.OccurrenceID.String()), zap.Error(err))
+		// Log occurrence as failed if event cannot be fetched
+		logErrOccurrence(ctx, d.occurrenceRepo, sched, 0, "", fmt.Sprintf("event not found for dispatch: %v", err))
+		// Defensive: Clean up orphaned schedule if event does not exist (similar to old logic)
 		key := fmt.Sprintf("schedule:%s:%d", sched.EventID.String(), sched.ScheduledAt.Unix())
 		if d.scheduler != nil && d.scheduler.redis != nil {
-			_, zremErr := d.scheduler.redis.ZRem(ctx, d.scheduler.redisPrefix+ScheduleKey, key).Result()
-			_, hdelErr := d.scheduler.redis.HDel(ctx, d.scheduler.redisPrefix+"schedule:data", key).Result()
-			d.logger.Warn("Orphaned schedule found and removed",
-				zap.String("event_id", sched.EventID.String()),
-				zap.String("schedule_key", key),
-				zap.Error(err),
-				zap.Error(zremErr),
-				zap.Error(hdelErr),
-			)
+			_, _ = d.scheduler.redis.ZRem(ctx, d.scheduler.redisPrefix+ScheduleKey, key).Result()     // Best effort
+			_, _ = d.scheduler.redis.HDel(ctx, d.scheduler.redisPrefix+"schedule:data", key).Result() // Best effort
+			d.logger.Warn("Orphaned schedule possibly removed after failing to fetch event for dispatch", zap.String("event_id", sched.EventID.String()), zap.String("schedule_key", key))
 		}
-		return fmt.Errorf("event not found: %s", sched.EventID)
+		return fmt.Errorf("event not found for dispatch: %s, error: %w", sched.EventID, err)
 	}
-	if strings.HasPrefix(sched.Webhook, "q:") {
-		if d.clientNotifier == nil {
-			return fmt.Errorf("client notifier not configured for q: webhooks")
-		}
-		clientID := strings.TrimPrefix(sched.Webhook, "q:")
-		payload := map[string]interface{}{
-			"event_id":      sched.EventID,
-			"occurrence_id": sched.OccurrenceID,
-			"name":          sched.Name,
-			"description":   sched.Description,
-			"scheduled_at":  sched.ScheduledAt,
-			"metadata":      sched.Metadata,
-		}
-		jsonPayload, err := json.Marshal(payload)
-		if err != nil {
-			return fmt.Errorf("error marshaling payload: %w", err)
-		}
-		err = d.clientNotifier.DispatchToClient(clientID, jsonPayload)
-		finalStatus := models.OccurrenceStatusCompleted
-		if err != nil {
-			finalStatus = models.OccurrenceStatusFailed
-		}
-		logOccurrence := &models.Occurrence{
-			OccurrenceID: sched.OccurrenceID,
-			EventID:      sched.EventID,
-			ScheduledAt:  sched.ScheduledAt,
-			Status:       finalStatus,
-			AttemptCount: sched.AttemptCount,
-			Timestamp:    time.Now(),
-			StatusCode:   0,
-			ResponseBody: "",
-			ErrorMessage: fmt.Sprintf("client hook dispatch: %v", err),
-		}
-		_ = d.occurrenceRepo.Create(ctx, logOccurrence)
-		return err
+	if event == nil { // Should be covered by err != nil if repo returns sql.ErrNoRows correctly mapped
+		d.logger.Error("Event is nil after GetByID for dispatch", zap.String("event_id", sched.EventID.String()), zap.String("occurrence_id", sched.OccurrenceID.String()))
+		logErrOccurrence(ctx, d.occurrenceRepo, sched, 0, "", "event is nil after GetByID")
+		return fmt.Errorf("event is nil after GetByID: %s", sched.EventID)
 	}
-	// Prepare webhook payload with rich information
-	payload := map[string]interface{}{
-		"event_id":      sched.EventID,
-		"occurrence_id": sched.OccurrenceID,
-		"name":          sched.Name,
-		"description":   sched.Description,
-		"scheduled_at":  sched.ScheduledAt,
-		"metadata":      sched.Metadata,
+
+	// Ensure Action is present. The repository should have populated it.
+	// If not, log a warning. The migration should handle old data.
+	if event.Action == nil {
+		d.logger.Error("Event action is nil, cannot dispatch", zap.String("event_id", event.ID.String()), zap.String("occurrence_id", sched.OccurrenceID.String()))
+		logErrOccurrence(ctx, d.occurrenceRepo, sched, 0, "", "event action is nil")
+		return fmt.Errorf("event action is nil for event %s", event.ID)
 	}
-	jsonPayload, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("error marshaling payload: %w", err)
-	}
-	baseReq, err := http.NewRequestWithContext(ctx, "POST", sched.Webhook, nil)
-	if err != nil {
-		return fmt.Errorf("error creating request: %w", err)
-	}
-	baseReq.Header.Set("Content-Type", "application/json")
-	baseReq.Header.Set("Content-Length", fmt.Sprintf("%d", len(jsonPayload)))
-	if d.hmacService != nil {
-		secret := ""
-		signature := d.hmacService.SignPayload(jsonPayload, secret)
-		baseReq.Header.Set("X-Qhronos-Signature", signature)
-	}
-	// Only one attempt per call
-	attemptCount := sched.AttemptCount
-	if attemptCount == 0 {
-		attemptCount = 1
-	} else {
-		attemptCount++
-	}
-	req := baseReq.Clone(ctx)
-	req.Body = ioutil.NopCloser(bytes.NewBuffer(jsonPayload))
-	var finalStatus models.OccurrenceStatus
+
+	// Increment attempt count for the schedule from Redis before dispatching
+	// Note: sched.AttemptCount is from Redis and might not reflect the absolute truth if there were prior system crashes.
+	// The occurrence table logging will reflect the true attempt for that specific logged dispatch.
+	currentAttempt := sched.AttemptCount + 1 // This is the attempt number for *this* dispatch cycle from Redis data.
+
+	var dispatchError error
 	var statusCode int
 	var responseBody string
-	var errorMessage string
-	resp, err := d.client.Do(req)
-	if err != nil {
+	var finalStatus models.OccurrenceStatus
+
+	dispatchError = d.actionsManager.Execute(ctx, event)
+	// Optionally, you can enhance ActionsManager.Execute to return statusCode/responseBody if needed in the future.
+	// For now, just handle error/success as before.
+
+	// Log Occurrence
+	errorMessage := ""
+	if dispatchError != nil {
 		finalStatus = models.OccurrenceStatusFailed
-		statusCode = 0
-		responseBody = ""
-		errorMessage = err.Error()
-	} else if resp == nil {
-		finalStatus = models.OccurrenceStatusFailed
-		statusCode = 0
-		responseBody = ""
-		errorMessage = "empty response from server"
+		errorMessage = dispatchError.Error()
 	} else {
-		defer func() {
-			if resp.Body != nil {
-				resp.Body.Close()
-			}
-		}()
-		statusCode = resp.StatusCode
-		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			finalStatus = models.OccurrenceStatusCompleted
-			responseBody = ""
-			errorMessage = ""
-		} else {
-			finalStatus = models.OccurrenceStatusFailed
-			responseBody = ""
-			errorMessage = fmt.Sprintf("received non-2xx status code: %d", resp.StatusCode)
+		finalStatus = models.OccurrenceStatusCompleted
+	}
+
+	logOccurrence := &models.Occurrence{
+		OccurrenceID: sched.OccurrenceID,
+		EventID:      event.ID,
+		ScheduledAt:  sched.ScheduledAt,
+		Status:       finalStatus,
+		AttemptCount: currentAttempt, // Use the attempt count for this dispatch cycle
+		Timestamp:    time.Now(),
+		StatusCode:   statusCode,
+		ResponseBody: responseBody, // May be empty for websocket
+		ErrorMessage: errorMessage,
+		StartedAt:    sched.ScheduledAt, // Assign time.Time directly
+		CompletedAt:  time.Now(),        // Assign time.Time directly
+	}
+	if err := d.occurrenceRepo.Create(ctx, logOccurrence); err != nil {
+		d.logger.Error("Failed to log occurrence", zap.Error(err), zap.String("occurrence_id", sched.OccurrenceID.String()))
+		// Even if logging fails, the original dispatchError determines the return for retry logic.
+	}
+
+	// Auto-inactivate one-time events after dispatch (success or max retries - this check is now implicit in worker)
+	if event.Schedule == nil && event.Status == models.EventStatusActive && finalStatus == models.OccurrenceStatusCompleted {
+		// If it's a one-time event and completed successfully, mark as inactive.
+		// Retry logic in Run() handles maxRetries failures.
+		event.Status = models.EventStatusInactive
+		if err := d.eventRepo.Update(ctx, event); err != nil {
+			d.logger.Error("Failed to auto-inactivate event", zap.String("event_id", event.ID.String()), zap.Error(err))
 		}
 	}
-	logOccurrence := &models.Occurrence{
+
+	return dispatchError // This error determines if it goes to retry queue
+}
+
+// Helper to log an error occurrence
+func logErrOccurrence(ctx context.Context, repo *repository.OccurrenceRepository, sched *models.Schedule, attempt int, respBody, errMsg string) {
+	if repo == nil || sched == nil {
+		return
+	}
+	log := &models.Occurrence{
 		OccurrenceID: sched.OccurrenceID,
 		EventID:      sched.EventID,
 		ScheduledAt:  sched.ScheduledAt,
-		Status:       finalStatus,
-		AttemptCount: attemptCount,
+		Status:       models.OccurrenceStatusFailed,
+		AttemptCount: attempt,
 		Timestamp:    time.Now(),
-		StatusCode:   statusCode,
-		ResponseBody: responseBody,
-		ErrorMessage: errorMessage,
+		ResponseBody: respBody,
+		ErrorMessage: errMsg,
 	}
-	_ = d.occurrenceRepo.Create(ctx, logOccurrence)
-	// Auto-inactivate one-time events after dispatch (success or max retries)
-	event, err = d.eventRepo.GetByID(ctx, sched.EventID)
-	if event == nil {
-		return fmt.Errorf("event not found: %s", sched.EventID)
-	}
-	if err == nil && event.Schedule == nil && event.Status == "active" {
-		event.Status = "inactive"
-		_ = d.eventRepo.Update(ctx, event)
-	}
-	if finalStatus == models.OccurrenceStatusCompleted {
-		return nil
-	}
-	return fmt.Errorf("dispatch failed: %s", errorMessage)
+	_ = repo.Create(ctx, log) // Best effort logging
 }
 
 const retryQueueKey = "retry:queue"
@@ -248,7 +214,7 @@ return due
 				now := fmt.Sprintf("%f", float64(time.Now().Unix()))
 				// Use Lua script for atomic move
 				res, err := scheduler.redis.Eval(ctx, retryLua, []string{d.scheduler.redisPrefix + retryQueueKey, d.scheduler.redisPrefix + dispatchQueueKey}, now).Result()
-				if err != nil {
+				if err != nil && err != redis.Nil { // redis.Nil can happen if script returns empty array but is not an actual error
 					d.logger.Error("[RETRY POLLER] Lua script failed", zap.Error(err))
 					continue
 				}
@@ -263,87 +229,80 @@ return due
 		for {
 			select {
 			case <-ctx.Done():
+				d.logger.Info("Dispatcher worker shutting down", zap.Int("worker_id", workerID))
 				return
 			default:
-				itemStart := time.Now()
-				d.logger.Debug("[DISPATCHER] Worker waiting for item", zap.Int("worker_id", workerID), zap.Time("ts", itemStart))
-				// Pop from dispatch queue (no processing queue)
-				popStart := time.Now()
+				// Pop from dispatch queue
 				data, err := scheduler.redis.BRPop(ctx, 5*time.Second, d.scheduler.redisPrefix+dispatchQueueKey).Result()
-				popEnd := time.Now()
-				d.logger.Debug("[DISPATCHER] BRPop duration", zap.Int("worker_id", workerID), zap.Duration("duration", popEnd.Sub(popStart)), zap.Error(err))
 				if err == redis.Nil {
-					d.logger.Debug("[DISPATCHER] No item found, continuing", zap.Int("worker_id", workerID), zap.Time("ts", time.Now()))
 					continue // No item, keep waiting
 				} else if err != nil {
-					d.logger.Error("Worker failed to BRPOP", zap.Int("worker_id", workerID), zap.Error(err))
+					d.logger.Error("Worker failed to BRPop from dispatch queue", zap.Int("worker_id", workerID), zap.Error(err))
+					time.Sleep(1 * time.Second) // Avoid fast loop on persistent BRPop errors
 					continue
 				}
-				// BRPop returns [queue, value]
-				item := data[1]
-				unmarshalStart := time.Now()
+
+				item := data[1] // BRPop returns [queue, value]
 				var sched models.Schedule
 				if err := json.Unmarshal([]byte(item), &sched); err != nil {
-					d.logger.Error("Worker failed to unmarshal schedule", zap.Int("worker_id", workerID), zap.Error(err), zap.String("data", item))
+					d.logger.Error("Worker failed to unmarshal schedule from dispatch queue", zap.Int("worker_id", workerID), zap.Error(err), zap.String("data", item))
 					continue
 				}
-				unmarshalEnd := time.Now()
-				d.logger.Debug("[DISPATCHER] Unmarshal duration", zap.Int("worker_id", workerID), zap.Duration("duration", unmarshalEnd.Sub(unmarshalStart)))
-				d.logger.Debug("[DISPATCHER] Worker unmarshalled schedule", zap.Int("worker_id", workerID), zap.Any("schedule", sched))
-				d.logger.Debug("[DISPATCHER] Worker dispatching webhook", zap.Int("worker_id", workerID), zap.String("occurrence_id", sched.OccurrenceID.String()))
 
-				// Track and increment attempt count
-				if sched.AttemptCount == 0 {
-					sched.AttemptCount = 1
-				} else {
-					sched.AttemptCount++
-				}
+				d.logger.Debug("Worker picked up schedule for dispatch", zap.Int("worker_id", workerID), zap.String("occurrence_id", sched.OccurrenceID.String()))
 
-				dispatchStart := time.Now()
-				err = d.DispatchWebhook(ctx, &sched)
-				dispatchEnd := time.Now()
-				d.logger.Debug("[DISPATCHER] DispatchWebhook duration", zap.Int("worker_id", workerID), zap.Duration("duration", dispatchEnd.Sub(dispatchStart)), zap.Error(err))
+				// DispatchAction will handle logging the occurrence and fetching the full event.
+				// The sched.AttemptCount from Redis is passed to give context on retries for this queue item.
+				dispatchErr := d.DispatchAction(ctx, &sched)
 
-				if err != nil {
-					d.logger.Error("Worker failed to dispatch webhook", zap.Int("worker_id", workerID), zap.String("occurrence_id", sched.OccurrenceID.String()), zap.Error(err), zap.Int("attempt_count", sched.AttemptCount))
-					if sched.AttemptCount >= d.maxRetries {
-						d.logger.Debug("[DISPATCHER] Max retries exceeded, dropping item", zap.Int("worker_id", workerID), zap.Any("schedule", sched))
-						// No further action needed, item is dropped
+				if dispatchErr != nil {
+					d.logger.Error("DispatchAction failed",
+						zap.Int("worker_id", workerID),
+						zap.String("occurrence_id", sched.OccurrenceID.String()),
+						zap.Int("redis_attempt_count", sched.AttemptCount+1),
+						zap.Error(dispatchErr))
+
+					if sched.AttemptCount+1 >= d.maxRetries {
+						d.logger.Warn("Max retries exceeded for occurrence, dropping item",
+							zap.Int("worker_id", workerID),
+							zap.String("occurrence_id", sched.OccurrenceID.String()),
+							zap.Int("attempts", sched.AttemptCount+1))
+						// Final failure is logged by DispatchAction itself via logErrOccurrence or by successful creation with failed status.
 					} else {
-						zaddStart := time.Now()
-						nextRetry := time.Now().Add(d.retryDelay).Unix()
-						updatedData, _ := json.Marshal(sched)
-						d.logger.Debug("[DISPATCHER] Before ZAdd to retry queue", zap.Int("worker_id", workerID), zap.Time("ts", zaddStart))
-						err := scheduler.redis.ZAdd(ctx, d.scheduler.redisPrefix+retryQueueKey, redis.Z{
-							Score:  float64(nextRetry),
-							Member: updatedData,
-						}).Err()
-						zaddEnd := time.Now()
-						d.logger.Debug("[DISPATCHER] After ZAdd to retry queue", zap.Int("worker_id", workerID), zap.Time("ts", zaddEnd), zap.Duration("duration", zaddEnd.Sub(zaddStart)), zap.Error(err))
-						if err != nil {
-							d.logger.Error("[DISPATCHER] Failed to add to retry queue", zap.Int("worker_id", workerID), zap.Error(err))
+						// Re-queue for retry
+						sched.AttemptCount++ // Increment attempt for next try
+						updatedData, marshalErr := json.Marshal(sched)
+						if marshalErr != nil {
+							d.logger.Error("Failed to marshal schedule for retry queue", zap.Error(marshalErr), zap.String("occurrence_id", sched.OccurrenceID.String()))
+							continue // Skip re-queueing if marshaling fails
 						}
-						d.logger.Debug("[DISPATCHER] Item moved to retry queue", zap.Int("worker_id", workerID), zap.Any("schedule", sched), zap.Int64("next_retry", nextRetry))
+						nextRetryTime := time.Now().Add(d.retryDelay).Unix()
+						if zerr := scheduler.redis.ZAdd(ctx, d.scheduler.redisPrefix+retryQueueKey, redis.Z{
+							Score:  float64(nextRetryTime),
+							Member: updatedData,
+						}).Err(); zerr != nil {
+							d.logger.Error("Failed to add item to retry queue", zap.Error(zerr), zap.String("occurrence_id", sched.OccurrenceID.String()))
+						} else {
+							d.logger.Info("Item moved to retry queue", zap.String("occurrence_id", sched.OccurrenceID.String()), zap.Int("next_attempt", sched.AttemptCount))
+						}
 					}
-					itemEnd := time.Now()
-					d.logger.Debug("[DISPATCHER] Total time for item", zap.Int("worker_id", workerID), zap.Duration("duration", itemEnd.Sub(itemStart)))
-					continue
+				} else {
+					d.logger.Info("DispatchAction successful", zap.Int("worker_id", workerID), zap.String("occurrence_id", sched.OccurrenceID.String()))
 				}
-				d.logger.Debug("[DISPATCHER] Worker successfully dispatched webhook", zap.Int("worker_id", workerID), zap.String("occurrence_id", sched.OccurrenceID.String()))
-				itemEnd := time.Now()
-				d.logger.Debug("[DISPATCHER] Total time for item", zap.Int("worker_id", workerID), zap.Duration("duration", itemEnd.Sub(itemStart)))
 			}
 		}
 	}
 	for i := 0; i < workerCount; i++ {
 		go workerFn(i)
 	}
+
 	<-ctx.Done()
 	pollerCancel()
-	d.logger.Info("Dispatcher worker pool shutting down")
-	return ctx.Err()
+	d.logger.Info("Dispatcher worker pool shutting down.")
+	return nil // Or ctx.Err() if you want to propagate it
 }
 
+// timePtr helper, can be removed if not used elsewhere.
 func timePtr(t time.Time) *time.Time {
 	return &t
 }

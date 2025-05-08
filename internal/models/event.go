@@ -60,21 +60,22 @@ func (s *ScheduleConfig) Scan(value interface{}) error {
 type Event struct {
 	ID          uuid.UUID       `json:"id" db:"id"`
 	Name        string          `json:"name" db:"name"`
-	Description string          `json:"description" db:"description"`
+	Description string          `json:"description" db:"description,omitempty"`
 	StartTime   time.Time       `json:"start_time" db:"start_time"`
 	Webhook     string          `json:"webhook" db:"webhook"`
-	Metadata    datatypes.JSON  `json:"metadata" db:"metadata"`
-	Schedule    *ScheduleConfig `json:"schedule,omitempty" db:"schedule"`
-	Tags        pq.StringArray  `json:"tags" db:"tags"`
+	Action      *Action         `json:"action" db:"action,omitempty"`
+	Metadata    datatypes.JSON  `json:"metadata" db:"metadata,omitempty"`
+	Schedule    *ScheduleConfig `json:"schedule" db:"schedule,omitempty"`
+	Tags        pq.StringArray  `json:"tags" db:"tags,omitempty"`
 	Status      EventStatus     `json:"status" db:"status"`
-	HMACSecret  *string         `json:"hmac_secret,omitempty" db:"hmac_secret"`
+	HMACSecret  *string         `json:"hmac_secret" db:"hmac_secret,omitempty"`
 	CreatedAt   time.Time       `json:"created_at" db:"created_at"`
-	UpdatedAt   *time.Time      `json:"updated_at,omitempty" db:"updated_at"`
+	UpdatedAt   *time.Time      `json:"updated_at" db:"updated_at,omitempty"`
 }
 
 type CreateEventRequest struct {
 	Name        string          `json:"name" validate:"required"`
-	Description string          `json:"description"`
+	Description *string         `json:"description,omitempty"`
 	StartTime   time.Time       `json:"start_time" validate:"required"`
 	Webhook     string          `json:"webhook" validate:"required"`
 	Metadata    datatypes.JSON  `json:"metadata" validate:"required"`
@@ -100,4 +101,75 @@ type EventFilter struct {
 	Status          EventStatus
 	StartTimeBefore *time.Time
 	StartTimeAfter  *time.Time
+}
+
+// TableName specifies the database table name for GORM (if used)
+// For sqlx, this is typically not needed in the struct itself.
+/*func (Event) TableName() string {
+	return "events"
+}*/
+
+// ToEventResponse converts an Event model to an EventResponse for API output.
+// This can be expanded to include more fields or transform data as needed.
+func (e *Event) ToEventResponse() EventResponse {
+	return EventResponse{
+		ID:          e.ID,
+		Name:        e.Name,
+		Description: e.Description,
+		StartTime:   e.StartTime,
+		Webhook:     e.Webhook,
+		Action:      e.Action,
+		Metadata:    e.Metadata,
+		Schedule:    e.Schedule,
+		Tags:        e.Tags,
+		Status:      string(e.Status),
+		HMACSecret:  e.HMACSecret,
+		CreatedAt:   e.CreatedAt,
+		UpdatedAt:   e.UpdatedAt,
+	}
+}
+
+// EventCreateRequest defines the structure for creating a new event
+type EventCreateRequest struct {
+	Name        string          `json:"name" binding:"required"`
+	Description *string         `json:"description,omitempty"`
+	StartTime   time.Time       `json:"start_time" binding:"required"`
+	Webhook     *string         `json:"webhook,omitempty"`  // Kept for backward compatibility
+	Action      *Action         `json:"action,omitempty"`   // New action field
+	Metadata    json.RawMessage `json:"metadata,omitempty"` // Use json.RawMessage for flexible metadata
+	Schedule    *ScheduleConfig `json:"schedule,omitempty"`
+	Tags        []string        `json:"tags,omitempty"`
+	HMACSecret  *string         `json:"hmac_secret,omitempty"`
+}
+
+// EventUpdateRequest defines the structure for updating an existing event
+// All fields are optional, so use pointers
+type EventUpdateRequest struct {
+	Name        *string         `json:"name,omitempty"`
+	Description *string         `json:"description,omitempty"`
+	StartTime   *time.Time      `json:"start_time,omitempty"`
+	Webhook     *string         `json:"webhook,omitempty"`  // Kept for backward compatibility
+	Action      *Action         `json:"action,omitempty"`   // New action field
+	Metadata    json.RawMessage `json:"metadata,omitempty"` // Use json.RawMessage for flexible metadata
+	Schedule    *ScheduleConfig `json:"schedule,omitempty"`
+	Tags        []string        `json:"tags,omitempty"`
+	Status      *EventStatus    `json:"status,omitempty"`
+	HMACSecret  *string         `json:"hmac_secret,omitempty"`
+}
+
+// EventResponse defines the structure for API responses for an event
+type EventResponse struct {
+	ID          uuid.UUID       `json:"id"`
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	StartTime   time.Time       `json:"start_time"`
+	Webhook     string          `json:"webhook"`
+	Action      *Action         `json:"action,omitempty"`
+	Metadata    datatypes.JSON  `json:"metadata,omitempty"`
+	Schedule    *ScheduleConfig `json:"schedule,omitempty"`
+	Tags        pq.StringArray  `json:"tags,omitempty"`
+	Status      string          `json:"status"`
+	HMACSecret  *string         `json:"hmac_secret,omitempty"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   *time.Time      `json:"updated_at,omitempty"`
 }

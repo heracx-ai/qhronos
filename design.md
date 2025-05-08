@@ -344,3 +344,72 @@ Qhronos provides a WebSocket server to enable real-time event delivery for two t
 
 ---
 
+## Event Model
+
+Events now use an extensible action system for delivery. The `action` field specifies how the event is delivered.
+
+### Event Table (simplified)
+| Field         | Type                | Description                                 |
+|-------------- |-------------------- |---------------------------------------------|
+| id            | UUID                | Primary key                                 |
+| name          | TEXT                | Event name                                  |
+| description   | TEXT                | Event description                           |
+| start_time    | TIMESTAMP           | When the event is scheduled to start        |
+| action        | JSONB               | Action object (see below)                   |
+| webhook       | TEXT                | (Deprecated, for backward compatibility)    |
+| ...           | ...                 | ...                                         |
+
+### Action Structure
+
+The `action` field is a JSON object:
+```json
+{
+  "type": "webhook" | "websocket" | "apicall",
+  "params": { ... }
+}
+```
+- **type**: The action type. Supported: `webhook`, `websocket`, `apicall`.
+- **params**: Parameters for the action type.
+  - For `webhook`: `{ "url": "https://..." }`
+  - For `websocket`: `{ "client_name": "client1" }`
+  - For `apicall`: `{ "method": "POST", "url": "https://...", "headers": { ... }, "body": "..." }`
+
+#### Example: Webhook Action
+```json
+{
+  "type": "webhook",
+  "params": { "url": "https://example.com/webhook" }
+}
+```
+
+#### Example: Websocket Action
+```json
+{
+  "type": "websocket",
+  "params": { "client_name": "client1" }
+}
+```
+
+#### Example: API Call Action
+```json
+{
+  "type": "apicall",
+  "params": {
+    "method": "POST",
+    "url": "https://api.example.com/endpoint",
+    "headers": { "Authorization": "Bearer token", "Content-Type": "application/json" },
+    "body": "{ \"foo\": \"bar\" }"
+  }
+}
+```
+
+### Backward Compatibility
+- The legacy `webhook` field is still supported for legacy clients. If provided, it is mapped to the appropriate `action`.
+
+## Dispatcher and Action System
+
+The dispatcher no longer switches directly on webhook/websocket. Instead, it delegates event delivery to the action system:
+- The dispatcher uses an `ActionsManager` to execute the action specified in the event.
+- Each action type (webhook, websocket, apicall) is registered with the manager and can be extended in the future.
+- This design allows for easy addition of new action types (e.g., email, SMS, etc.) without changing the dispatcher logic.
+

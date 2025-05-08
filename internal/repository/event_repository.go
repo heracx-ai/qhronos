@@ -30,10 +30,70 @@ func timePtr(t time.Time) *time.Time {
 	return &t
 }
 
+// deriveAndSetAction populates the event.Action field based on event.Webhook
+// if Action is not already set. It also ensures Webhook is consistent if Action is set.
+func (r *EventRepository) deriveAndSetAction(event *models.Event) error {
+	// Always re-derive Action from Webhook if Webhook is set
+	if event.Webhook != "" {
+		var paramsBytes []byte
+		var err error
+		var actionType models.ActionType
+
+		if len(event.Webhook) > 2 && event.Webhook[:2] == "q:" {
+			actionType = models.ActionTypeWebsocket
+			wsParams := models.WebsocketActionParams{ClientName: event.Webhook[2:]}
+			paramsBytes, err = json.Marshal(wsParams)
+		} else {
+			actionType = models.ActionTypeWebhook
+			whParams := models.WebhookActionParams{URL: event.Webhook}
+			paramsBytes, err = json.Marshal(whParams)
+		}
+
+		if err != nil {
+			return fmt.Errorf("failed to marshal action params: %w", err)
+		}
+		event.Action = &models.Action{
+			Type:   actionType,
+			Params: paramsBytes,
+		}
+	} else if event.Action != nil && event.Webhook == "" {
+		r.populateWebhookFromAction(event)
+	}
+	return nil
+}
+
+// populateWebhookFromAction sets the event.Webhook string based on event.Action.
+// This is for backward compatibility for code that might still read the Webhook field.
+func (r *EventRepository) populateWebhookFromAction(event *models.Event) {
+	if event.Action == nil {
+		return
+	}
+	switch event.Action.Type {
+	case models.ActionTypeWebhook:
+		params, err := event.Action.GetWebhookParams()
+		if err != nil {
+			r.logger.Error("Failed to get webhook params for populating Webhook string", zap.String("event_id", event.ID.String()), zap.Error(err))
+			return
+		}
+		event.Webhook = params.URL
+	case models.ActionTypeWebsocket:
+		params, err := event.Action.GetWebsocketParams()
+		if err != nil {
+			r.logger.Error("Failed to get websocket params for populating Webhook string", zap.String("event_id", event.ID.String()), zap.Error(err))
+			return
+		}
+		event.Webhook = "q:" + params.ClientName
+	default:
+		// If action type is unknown or params are malformed, Webhook might remain as it is or be empty.
+		// Consider if event.Webhook should be cleared here if action type is unknown.
+		r.logger.Warn("Unknown action type for populating Webhook string", zap.String("event_id", event.ID.String()), zap.String("action_type", string(event.Action.Type)))
+	}
+}
+
 func (r *EventRepository) Create(ctx context.Context, event *models.Event) error {
 	query := `
-		INSERT INTO events (id, name, description, schedule, start_time, metadata, webhook, tags, status, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		INSERT INTO events (id, name, description, schedule, start_time, metadata, webhook, tags, status, created_at, updated_at, action)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		RETURNING id`
 
 	now := time.Now()
@@ -46,6 +106,10 @@ func (r *EventRepository) Create(ctx context.Context, event *models.Event) error
 		event.Status = models.EventStatusActive
 	}
 
+	if err := r.deriveAndSetAction(event); err != nil {
+		return fmt.Errorf("error deriving action for event: %w", err)
+	}
+
 	err := r.db.QueryRowContext(ctx, query,
 		event.ID,
 		event.Name,
@@ -53,11 +117,12 @@ func (r *EventRepository) Create(ctx context.Context, event *models.Event) error
 		event.Schedule,
 		event.StartTime,
 		event.Metadata,
-		event.Webhook,
+		event.Webhook, // Still pass webhook for now, migration will handle old data / or ensure deriveAndSetAction fills it if action exists
 		event.Tags,
 		event.Status,
 		event.CreatedAt,
 		event.UpdatedAt,
+		event.Action,
 	).Scan(&event.ID)
 
 	if err != nil {
@@ -69,7 +134,7 @@ func (r *EventRepository) Create(ctx context.Context, event *models.Event) error
 
 func (r *EventRepository) GetByID(ctx context.Context, id uuid.UUID) (*models.Event, error) {
 	query := `
-		SELECT id, name, description, schedule, start_time, metadata, webhook, tags, status, created_at, updated_at
+		SELECT id, name, description, schedule, start_time, metadata, webhook, tags, status, created_at, updated_at, action
 		FROM events
 		WHERE id = $1`
 
@@ -81,13 +146,13 @@ func (r *EventRepository) GetByID(ctx context.Context, id uuid.UUID) (*models.Ev
 	if err != nil {
 		return nil, fmt.Errorf("error getting event: %w", err)
 	}
-
+	r.populateWebhookFromAction(&event)
 	return &event, nil
 }
 
 func (r *EventRepository) List(ctx context.Context) ([]models.Event, error) {
 	query := `
-		SELECT id, name, description, schedule, start_time, metadata, webhook, tags, status, created_at, updated_at
+		SELECT id, name, description, schedule, start_time, metadata, webhook, tags, status, created_at, updated_at, action
 		FROM events
 		ORDER BY created_at DESC`
 
@@ -97,17 +162,25 @@ func (r *EventRepository) List(ctx context.Context) ([]models.Event, error) {
 		return nil, fmt.Errorf("error listing events: %w", err)
 	}
 
+	for i := range events {
+		r.populateWebhookFromAction(&events[i])
+	}
+
 	return events, nil
 }
 
 func (r *EventRepository) Update(ctx context.Context, event *models.Event) error {
 	query := `
 		UPDATE events
-		SET name = $1, description = $2, schedule = $3, start_time = $4, metadata = $5, webhook = $6, tags = $7, status = $8, updated_at = $9
-		WHERE id = $10
+		SET name = $1, description = $2, schedule = $3, start_time = $4, metadata = $5, webhook = $6, tags = $7, status = $8, updated_at = $9, action = $10
+		WHERE id = $11
 		RETURNING id`
 
 	event.UpdatedAt = timePtr(time.Now())
+
+	if err := r.deriveAndSetAction(event); err != nil {
+		return fmt.Errorf("error deriving action for event update: %w", err)
+	}
 
 	result, err := r.db.ExecContext(ctx, query,
 		event.Name,
@@ -119,6 +192,7 @@ func (r *EventRepository) Update(ctx context.Context, event *models.Event) error
 		event.Tags,
 		event.Status,
 		event.UpdatedAt,
+		event.Action,
 		event.ID,
 	)
 
@@ -202,7 +276,7 @@ func (r *EventRepository) RemoveEventOccurrencesFromRedis(ctx context.Context, e
 
 func (r *EventRepository) ListByTags(ctx context.Context, tags []string) ([]*models.Event, error) {
 	query := `
-		SELECT id, name, description, schedule, start_time, metadata, webhook, tags, status, created_at, updated_at
+		SELECT id, name, description, schedule, start_time, metadata, webhook, tags, status, created_at, updated_at, action
 		FROM events 
 		WHERE tags && $1
 		ORDER BY created_at DESC
@@ -212,6 +286,12 @@ func (r *EventRepository) ListByTags(ctx context.Context, tags []string) ([]*mod
 	err := r.db.SelectContext(ctx, &events, query, pq.Array(tags))
 	if err != nil {
 		return nil, fmt.Errorf("error listing events by tags: %w", err)
+	}
+
+	for i := range events {
+		if events[i] != nil {
+			r.populateWebhookFromAction(events[i])
+		}
 	}
 
 	return events, nil
@@ -246,7 +326,7 @@ func (r *EventRepository) DeleteOldOccurrences(ctx context.Context, cutoff time.
 
 func (r *EventRepository) ListActive(ctx context.Context) ([]*models.Event, error) {
 	query := `
-		SELECT id, name, description, schedule, start_time, metadata, webhook, tags, status, created_at, updated_at
+		SELECT id, name, description, schedule, start_time, metadata, webhook, tags, status, created_at, updated_at, action
 		FROM events
 		WHERE status = $1
 		ORDER BY created_at DESC`
@@ -255,6 +335,12 @@ func (r *EventRepository) ListActive(ctx context.Context) ([]*models.Event, erro
 	err := r.db.SelectContext(ctx, &events, query, models.EventStatusActive)
 	if err != nil {
 		return nil, fmt.Errorf("error listing active events: %w", err)
+	}
+
+	for i := range events {
+		if events[i] != nil {
+			r.populateWebhookFromAction(events[i])
+		}
 	}
 
 	return events, nil
@@ -351,51 +437,16 @@ func (r *EventRepository) CreateEvent(ctx context.Context, event *models.Event) 
 }
 
 func (r *EventRepository) GetEvent(ctx context.Context, id string) (*models.Event, error) {
-	query := `
-		SELECT id, name, description, start_time, webhook, 
-			metadata, schedule, tags, status, hmac_secret, created_at, updated_at
-		FROM events
-		WHERE id = $1
-	`
-
-	var event models.Event
-	var scheduleJSON []byte
-	err := r.db.QueryRowContext(ctx, query, id).Scan(
-		&event.ID,
-		&event.Name,
-		&event.Description,
-		&event.StartTime,
-		&event.Webhook,
-		&event.Metadata,
-		&scheduleJSON,
-		pq.Array(&event.Tags),
-		&event.Status,
-		&event.HMACSecret,
-		&event.CreatedAt,
-		&event.UpdatedAt,
-	)
+	eventID, err := uuid.Parse(id)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("event not found: %w", err)
-		}
-		return nil, fmt.Errorf("failed to get event: %w", err)
+		return nil, fmt.Errorf("invalid event ID format: %w", err)
 	}
-
-	if len(scheduleJSON) > 0 {
-		var schedule models.ScheduleConfig
-		if err := json.Unmarshal(scheduleJSON, &schedule); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal schedule: %w", err)
-		}
-		event.Schedule = &schedule
-	}
-
-	return &event, nil
+	return r.GetByID(ctx, eventID)
 }
 
 func (r *EventRepository) ListEvents(ctx context.Context, filter models.EventFilter) ([]*models.Event, error) {
 	query := `
-		SELECT id, name, description, start_time, webhook, 
-			metadata, schedule, tags, status, hmac_secret, created_at, updated_at
+		SELECT id, name, description, schedule, start_time, metadata, webhook, tags, status, created_at, updated_at, action
 		FROM events
 		WHERE 1=1
 	`
@@ -448,9 +499,9 @@ func (r *EventRepository) ListEvents(ctx context.Context, filter models.EventFil
 			&scheduleJSON,
 			pq.Array(&event.Tags),
 			&event.Status,
-			&event.HMACSecret,
 			&event.CreatedAt,
 			&event.UpdatedAt,
+			&event.Action,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan event: %w", err)
@@ -469,6 +520,12 @@ func (r *EventRepository) ListEvents(ctx context.Context, filter models.EventFil
 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("error iterating events: %w", err)
+	}
+
+	for i := range events {
+		if events[i] != nil {
+			r.populateWebhookFromAction(events[i])
+		}
 	}
 
 	return events, nil

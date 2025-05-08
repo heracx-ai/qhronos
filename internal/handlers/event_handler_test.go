@@ -26,6 +26,8 @@ func timePtr(t time.Time) *time.Time {
 	return &t
 }
 
+func ptr[T any](v T) *T { return &v }
+
 func TestEventHandler(t *testing.T) {
 	db := testutils.TestDB(t)
 	logger := zap.NewNop()
@@ -69,7 +71,7 @@ func TestEventHandler(t *testing.T) {
 		cleanup()
 		req := models.CreateEventRequest{
 			Name:        "Test Event",
-			Description: "Test Description",
+			Description: ptr("Test Description"),
 			StartTime:   time.Now(),
 			Webhook:     "https://example.com/webhook",
 			Metadata:    datatypes.JSON([]byte(`{"key": "value"}`)),
@@ -94,7 +96,7 @@ func TestEventHandler(t *testing.T) {
 		err = json.Unmarshal(w.Body.Bytes(), &response)
 		require.NoError(t, err)
 		assert.Equal(t, req.Name, response.Name)
-		assert.Equal(t, req.Description, response.Description)
+		assert.Equal(t, *req.Description, response.Description)
 		assert.Equal(t, req.Webhook, response.Webhook)
 		assertJSONEqual(t, req.Metadata, response.Metadata)
 		assert.Equal(t, req.Schedule, response.Schedule)
@@ -164,16 +166,13 @@ func TestEventHandler(t *testing.T) {
 		require.NoError(t, err)
 
 		updateReq := models.UpdateEventRequest{
-			Name:        stringPtr("Updated Event"),
-			Description: stringPtr("Updated Description"),
-			Webhook:     stringPtr("https://example.com/updated"),
+			Name:        ptr("Updated Event"),
+			Description: ptr("Updated Description"),
+			Webhook:     ptr("https://example.com/updated"),
 			Metadata:    datatypes.JSON([]byte(`{"key": "updated"}`)),
-			Schedule: &models.ScheduleConfig{
-				Frequency: "daily",
-				Interval:  1,
-			},
-			Tags:   []string{"updated"},
-			Status: stringPtr(string(models.EventStatusInactive)),
+			Schedule:    &models.ScheduleConfig{Frequency: "daily", Interval: 1},
+			Tags:        []string{"updated"},
+			Status:      ptr(string(models.EventStatusInactive)),
 		}
 		body, err := json.Marshal(updateReq)
 		require.NoError(t, err)
@@ -188,12 +187,13 @@ func TestEventHandler(t *testing.T) {
 		var response models.Event
 		err = json.Unmarshal(w.Body.Bytes(), &response)
 		require.NoError(t, err)
-		assert.Equal(t, *updateReq.Name, response.Name)
-		assert.Equal(t, *updateReq.Description, response.Description)
-		assert.Equal(t, *updateReq.Webhook, response.Webhook)
-		assertJSONEqual(t, updateReq.Metadata, response.Metadata)
-		assert.Equal(t, updateReq.Schedule, response.Schedule)
-		assert.ElementsMatch(t, updateReq.Tags, response.Tags)
+		assert.Equal(t, "Updated Event", response.Name)
+		assert.Equal(t, "Updated Description", response.Description)
+		assert.Equal(t, "https://example.com/updated", response.Webhook)
+		assertJSONEqual(t, datatypes.JSON([]byte(`{"key": "updated"}`)), response.Metadata)
+		require.NotNil(t, response.Schedule)
+		assert.Equal(t, models.ScheduleConfig{Frequency: "daily", Interval: 1}, *response.Schedule)
+		assert.ElementsMatch(t, []string{"updated"}, response.Tags)
 		assert.Equal(t, models.EventStatusInactive, response.Status)
 	})
 
@@ -288,7 +288,7 @@ func TestEventHandler(t *testing.T) {
 		cleanup()
 		req := models.CreateEventRequest{
 			Name:        "Test Event",
-			Description: "Test Description",
+			Description: ptr("Test Description"),
 			StartTime:   time.Now(),
 			Webhook:     "https://example.com/webhook",
 			Metadata:    datatypes.JSON([]byte(`{"key": "value"}`)),
@@ -550,10 +550,105 @@ func TestEventHandler(t *testing.T) {
 		router.ServeHTTP(w, r)
 		assert.Equal(t, http.StatusNotFound, w.Code)
 	})
-}
 
-func stringPtr(s string) *string {
-	return &s
+	t.Run("Create Event with action:webhook", func(t *testing.T) {
+		cleanup()
+		body := `{
+			"name": "Action Webhook Event",
+			"description": "Test event with webhook action",
+			"start_time": "2025-01-01T00:00:00Z",
+			"action": {
+				"type": "webhook",
+				"params": { "url": "https://example.com/webhook" }
+			},
+			"tags": ["api"]
+		}`
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("POST", "/events", bytes.NewBufferString(body))
+		r.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(w, r)
+		assert.Equal(t, http.StatusCreated, w.Code)
+		var resp map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &resp)
+		assert.NoError(t, err)
+		assert.Equal(t, "Action Webhook Event", resp["name"])
+		assert.Equal(t, "Test event with webhook action", resp["description"])
+		action := resp["action"].(map[string]interface{})
+		assert.Equal(t, "webhook", action["type"])
+		params := action["params"].(map[string]interface{})
+		assert.Equal(t, "https://example.com/webhook", params["url"])
+	})
+
+	t.Run("Create Event with action:websocket", func(t *testing.T) {
+		cleanup()
+		body := `{
+			"name": "Action Websocket Event",
+			"description": "Test event with websocket action",
+			"start_time": "2025-01-01T00:00:00Z",
+			"action": {
+				"type": "websocket",
+				"params": { "client_name": "client1" }
+			},
+			"tags": ["api"]
+		}`
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("POST", "/events", bytes.NewBufferString(body))
+		r.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(w, r)
+		assert.Equal(t, http.StatusCreated, w.Code)
+		var resp map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &resp)
+		assert.NoError(t, err)
+		assert.Equal(t, "Action Websocket Event", resp["name"])
+		assert.Equal(t, "Test event with websocket action", resp["description"])
+		action := resp["action"].(map[string]interface{})
+		assert.Equal(t, "websocket", action["type"])
+		params := action["params"].(map[string]interface{})
+		assert.Equal(t, "client1", params["client_name"])
+	})
+
+	t.Run("Update Event with new action", func(t *testing.T) {
+		cleanup()
+		// Create initial event
+		body := `{
+			"name": "Update Action Event",
+			"description": "Initial event",
+			"start_time": "2025-01-01T00:00:00Z",
+			"action": {
+				"type": "webhook",
+				"params": { "url": "https://example.com/old" }
+			},
+			"tags": ["api"]
+		}`
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("POST", "/events", bytes.NewBufferString(body))
+		r.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(w, r)
+		assert.Equal(t, http.StatusCreated, w.Code)
+		var resp map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &resp)
+		assert.NoError(t, err)
+		id := resp["id"].(string)
+		// Update with new action
+		updateBody := `{
+			"action": {
+				"type": "websocket",
+				"params": { "client_name": "client2" }
+			}
+		}`
+		w2 := httptest.NewRecorder()
+		r2 := httptest.NewRequest("PUT", "/events/"+id, bytes.NewBufferString(updateBody))
+		r2.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(w2, r2)
+		assert.Equal(t, http.StatusOK, w2.Code)
+		var resp2 map[string]interface{}
+		err = json.Unmarshal(w2.Body.Bytes(), &resp2)
+		assert.NoError(t, err)
+		action := resp2["action"].(map[string]interface{})
+		assert.Equal(t, "websocket", action["type"])
+		params := action["params"].(map[string]interface{})
+		assert.Equal(t, "client2", params["client_name"])
+	})
 }
 
 func assertJSONEqual(t *testing.T, expected, actual datatypes.JSON) {
