@@ -6,35 +6,35 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- Configuration Tables
 
 -- System configuration including retention policies
-CREATE TABLE system_config (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    key TEXT UNIQUE NOT NULL,
-    value JSONB NOT NULL,
-    description TEXT,
-    updated_at TIMESTAMPTZ DEFAULT now(),
-    updated_by TEXT NOT NULL
-);
+-- CREATE TABLE system_config (
+--     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+--     key TEXT UNIQUE NOT NULL,
+--     value JSONB NOT NULL,
+--     description TEXT,
+--     updated_at TIMESTAMPTZ DEFAULT now(),
+--     updated_by TEXT NOT NULL
+-- );
 
 -- Insert default retention policies
-INSERT INTO system_config (key, value, description, updated_by) VALUES
-('retention_policies', '{
-    "logs": {
-        "webhook_attempts": "30d",
-        "api_requests": "90d",
-        "error_logs": "180d",
-        "performance_metrics": "365d"
-    },
-    "events": {
-        "max_future_scheduling": "365d",
-        "max_past_occurrences": "30d",
-        "archived_events": "5y"
-    },
-    "analytics": {
-        "hourly_metrics": "30d",
-        "daily_metrics": "365d",
-        "monthly_metrics": "5y"
-    }
-}', 'Data retention policies in days (d) or years (y)', 'system');
+-- INSERT INTO system_config (key, value, description, updated_by) VALUES
+-- ('retention_policies', '{
+--     "logs": {
+--         "webhook_attempts": "30d",
+--         "api_requests": "90d",
+--         "error_logs": "180d",
+--         "performance_metrics": "365d"
+--     },
+--     "events": {
+--         "max_future_scheduling": "365d",
+--         "max_past_occurrences": "30d",
+--         "archived_events": "5y"
+--     },
+--     "analytics": {
+--         "hourly_metrics": "30d",
+--         "daily_metrics": "365d",
+--         "monthly_metrics": "5y"
+--     }
+-- }', 'Data retention policies in days (d) or years (y)', 'system');
 
 -- Core Tables with Retention Policies
 

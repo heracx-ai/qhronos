@@ -227,7 +227,7 @@ func main() {
 	// Initialize services
 	tokenService := services.NewTokenService(cfg.Auth.MasterToken, cfg.Auth.JWTSecret)
 	hmacService := services.NewHMACService(cfg.HMAC.DefaultSecret)
-	dispatcher := scheduler.NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, cfg.DispatchMaxRetries, cfg.DispatchRetryBackoff, wsHandler, schedulerService)
+	dispatcher := scheduler.NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, cfg.DispatchMaxRetries, cfg.DispatchRetryBackoff, wsHandler, schedulerService, nil)
 
 	// Initialize handlers
 	eventHandler := handlers.NewEventHandler(eventRepo, expander)

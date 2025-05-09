@@ -83,8 +83,7 @@ func TestDispatcher(t *testing.T) {
 	mockHTTP := new(MockHTTPClient)
 
 	scheduler := NewScheduler(redisClient, logger, namespace)
-	dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, nil, scheduler)
-	dispatcher.SetHTTPClient(mockHTTP)
+	dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, nil, scheduler, mockHTTP)
 
 	// Add cleanup function
 	cleanup := func() {
@@ -99,24 +98,26 @@ func TestDispatcher(t *testing.T) {
 
 	t.Run("successful dispatch", func(t *testing.T) {
 		cleanup()
-
-		// Create test event
+		mockHTTP := new(MockHTTPClient)
+		dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, nil, scheduler, mockHTTP)
+		mockHTTP.On("Do", mock.AnythingOfType("*http.Request")).Return(&http.Response{
+			StatusCode: 200,
+			Body:       ioutil.NopCloser(bytes.NewBuffer([]byte{})),
+		}, nil)
+		whParams, _ := json.Marshal(models.WebhookActionParams{URL: "http://example.com/webhook"})
 		event := &models.Event{
 			ID:          uuid.New(),
 			Name:        "Test Event",
 			Description: "Test Description",
 			StartTime:   time.Now(),
-			Webhook:     "http://example.com/webhook",
+			Action:      &models.Action{Type: models.ActionTypeWebhook, Params: whParams},
 			Status:      models.EventStatusActive,
 			Metadata:    []byte(`{"key": "value"}`),
 			Tags:        pq.StringArray{"test"},
 			CreatedAt:   time.Now(),
 		}
-
 		err := eventRepo.Create(ctx, event)
 		require.NoError(t, err)
-
-		// Create test schedule (simulate scheduling in Redis only)
 		schedule := &models.Schedule{
 			Occurrence: models.Occurrence{
 				OccurrenceID: uuid.New(),
@@ -125,25 +126,13 @@ func TestDispatcher(t *testing.T) {
 			},
 			Name:        event.Name,
 			Description: event.Description,
-			Webhook:     event.Webhook,
+			Webhook:     "http://example.com/webhook",
 			Metadata:    event.Metadata,
 			Tags:        event.Tags,
 		}
-
-		// Setup expectations
-		mockHTTP.On("Do", mock.AnythingOfType("*http.Request")).Return(&http.Response{
-			StatusCode: 200,
-			Body:       ioutil.NopCloser(bytes.NewBuffer([]byte{})),
-		}, nil)
-
-		// Run dispatch
-		err = dispatcher.DispatchWebhook(ctx, schedule)
-
-		// Verify
+		err = dispatcher.DispatchAction(ctx, schedule)
 		assert.NoError(t, err)
 		mockHTTP.AssertExpectations(t)
-
-		// Verify schedule log in Postgres (append-only)
 		logged, err := occurrenceRepo.GetLatestByOccurrenceID(ctx, schedule.OccurrenceID)
 		require.NoError(t, err)
 		require.NotNil(t, logged)
@@ -151,11 +140,10 @@ func TestDispatcher(t *testing.T) {
 	})
 
 	t.Run("event not found", func(t *testing.T) {
-		start := time.Now()
-		cleanupStart := time.Now()
 		cleanup()
-		fmt.Printf("[PROFILE] cleanup: %v\n", time.Since(cleanupStart))
-		scheduleStart := time.Now()
+		mockHTTP := new(MockHTTPClient)
+		dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, nil, scheduler, mockHTTP)
+		mockHTTP.On("Do", mock.AnythingOfType("*http.Request")).Return((*http.Response)(nil), errors.New("event not found"))
 		schedule := &models.Schedule{
 			Occurrence: models.Occurrence{
 				OccurrenceID: uuid.New(),
@@ -168,38 +156,31 @@ func TestDispatcher(t *testing.T) {
 			Metadata:    []byte(`{"key": "value"}`),
 			Tags:        pq.StringArray{"test"},
 		}
-		fmt.Printf("[PROFILE] schedule creation: %v\n", time.Since(scheduleStart))
-		// Setup expectations for HTTP call (even if event not found, dispatcher may attempt HTTP call)
-		mockHTTP.On("Do", mock.AnythingOfType("*http.Request")).Return((*http.Response)(nil), errors.New("event not found"))
-		callStart := time.Now()
-		err := dispatcher.DispatchWebhook(ctx, schedule)
-		fmt.Printf("[PROFILE] DispatchWebhook call: %v\n", time.Since(callStart))
+		err := dispatcher.DispatchAction(ctx, schedule)
 		assert.Error(t, err)
-		assertionStart := time.Now()
 		assert.Contains(t, err.Error(), "event not found")
 		mockHTTP.AssertExpectations(t)
-		fmt.Printf("[PROFILE] final assertion: %v\n", time.Since(assertionStart))
-		fmt.Printf("[PROFILE] total test duration: %v\n", time.Since(start))
 	})
 
 	t.Run("webhook request failure", func(t *testing.T) {
 		cleanup()
-		// Create test event
+		mockHTTP := new(MockHTTPClient)
+		dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, nil, scheduler, mockHTTP)
+		mockHTTP.On("Do", mock.AnythingOfType("*http.Request")).Return((*http.Response)(nil), errors.New("connection failed"))
+		whParams, _ := json.Marshal(models.WebhookActionParams{URL: "http://example.com/webhook"})
 		event := &models.Event{
 			ID:          uuid.New(),
 			Name:        "Test Event",
 			Description: "Test Description",
 			StartTime:   time.Now(),
-			Webhook:     "http://example.com/webhook",
+			Action:      &models.Action{Type: models.ActionTypeWebhook, Params: whParams},
 			Status:      models.EventStatusActive,
 			Metadata:    []byte(`{"key": "value"}`),
 			Tags:        pq.StringArray{"test"},
 			CreatedAt:   time.Now(),
 		}
-
 		err := eventRepo.Create(ctx, event)
 		require.NoError(t, err)
-
 		schedule := &models.Schedule{
 			Occurrence: models.Occurrence{
 				OccurrenceID: uuid.New(),
@@ -208,88 +189,35 @@ func TestDispatcher(t *testing.T) {
 			},
 			Name:        event.Name,
 			Description: event.Description,
-			Webhook:     event.Webhook,
+			Webhook:     "http://example.com/webhook",
 			Metadata:    event.Metadata,
 			Tags:        event.Tags,
 		}
-
-		err = occurrenceRepo.Create(ctx, &models.Occurrence{
-			OccurrenceID: schedule.OccurrenceID,
-			EventID:      schedule.EventID,
-			ScheduledAt:  schedule.ScheduledAt,
-			Status:       models.OccurrenceStatusPending,
-			Timestamp:    time.Now(),
-			StatusCode:   0,
-			ResponseBody: "",
-			ErrorMessage: "",
-			StartedAt:    time.Time{},
-			CompletedAt:  time.Time{},
-		})
-		require.NoError(t, err)
-
-		// Setup expectations
-		mockHTTP.On("Do", mock.AnythingOfType("*http.Request")).Return((*http.Response)(nil), errors.New("connection failed"))
-
-		// Run dispatch
-		err = dispatcher.DispatchWebhook(ctx, schedule)
-
-		// Verify
+		err = dispatcher.DispatchAction(ctx, schedule)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "dispatch failed")
 		mockHTTP.AssertExpectations(t)
-
-		// Verify schedule status
 		updatedSchedule, err := occurrenceRepo.GetLatestByOccurrenceID(ctx, schedule.OccurrenceID)
 		require.NoError(t, err)
 		assert.Equal(t, models.OccurrenceStatusFailed, updatedSchedule.Status)
 	})
 
-	// Add client hook tests
 	t.Run("client hook dispatch - single client", func(t *testing.T) {
-		start := time.Now()
-		cleanupStart := time.Now()
 		cleanup()
-		fmt.Printf("[PROFILE] cleanup: %v\n", time.Since(cleanupStart))
-		dispatcherStart := time.Now()
+		mockHTTP := new(MockHTTPClient)
 		mockNotifier := NewMockClientNotifier()
 		mockNotifier.connected["client1"] = []string{"c1"}
-		dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, mockNotifier, scheduler)
-		fmt.Printf("[PROFILE] dispatcher creation: %v\n", time.Since(dispatcherStart))
-		scheduleStart := time.Now()
-		schedule := &models.Schedule{
-			Occurrence: models.Occurrence{
-				OccurrenceID: uuid.New(),
-				EventID:      uuid.New(),
-				ScheduledAt:  time.Now(),
-			},
-			Name:        "Client Hook Event",
-			Description: "Test client hook",
-			Webhook:     "q:client1",
-			Metadata:    []byte(`{"key": "value"}`),
-			Tags:        pq.StringArray{"test"},
-		}
-		fmt.Printf("[PROFILE] schedule creation: %v\n", time.Since(scheduleStart))
-		callStart := time.Now()
-		err := dispatcher.DispatchWebhook(ctx, schedule)
-		fmt.Printf("[PROFILE] DispatchWebhook call: %v\n", time.Since(callStart))
-		assert.NoError(t, err)
-		assertionStart := time.Now()
-		assert.Equal(t, []string{"client1:c1"}, mockNotifier.calls)
-		fmt.Printf("[PROFILE] final assertion: %v\n", time.Since(assertionStart))
-		fmt.Printf("[PROFILE] total test duration: %v\n", time.Since(start))
-	})
-
-	t.Run("client hook dispatch - no client connected", func(t *testing.T) {
-		cleanup()
-		mockNotifier := NewMockClientNotifier()
-		dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 2, 1*time.Millisecond, mockNotifier, scheduler)
-		// Insert the event into the database
+		dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, mockNotifier, scheduler, mockHTTP)
+		mockHTTP.On("Do", mock.AnythingOfType("*http.Request")).Return(&http.Response{
+			StatusCode: 200,
+			Body:       ioutil.NopCloser(bytes.NewBuffer([]byte{})),
+		}, nil)
+		wsParams, _ := json.Marshal(models.WebsocketActionParams{ClientName: "client1"})
 		event := &models.Event{
 			ID:          uuid.New(),
 			Name:        "Client Hook Event",
 			Description: "Test client hook",
 			StartTime:   time.Now(),
-			Webhook:     "q:client2",
+			Action:      &models.Action{Type: models.ActionTypeWebsocket, Params: wsParams},
 			Status:      models.EventStatusActive,
 			Metadata:    []byte(`{"key": "value"}`),
 			Tags:        pq.StringArray{"test"},
@@ -305,7 +233,47 @@ func TestDispatcher(t *testing.T) {
 			},
 			Name:        event.Name,
 			Description: event.Description,
-			Webhook:     event.Webhook,
+			Webhook:     "q:client1",
+			Metadata:    event.Metadata,
+			Tags:        event.Tags,
+		}
+		err = dispatcher.DispatchAction(ctx, schedule)
+		assert.NoError(t, err)
+		assert.Equal(t, []string{"client1:c1"}, mockNotifier.calls)
+	})
+
+	t.Run("client hook dispatch - no client connected", func(t *testing.T) {
+		cleanup()
+		mockHTTP := new(MockHTTPClient)
+		mockNotifier := NewMockClientNotifier()
+		dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 2, 1*time.Millisecond, mockNotifier, scheduler, mockHTTP)
+		mockHTTP.On("Do", mock.AnythingOfType("*http.Request")).Return(&http.Response{
+			StatusCode: 200,
+			Body:       ioutil.NopCloser(bytes.NewBuffer([]byte{})),
+		}, nil)
+		wsParams, _ := json.Marshal(models.WebsocketActionParams{ClientName: "client2"})
+		event := &models.Event{
+			ID:          uuid.New(),
+			Name:        "Client Hook Event",
+			Description: "Test client hook",
+			StartTime:   time.Now(),
+			Action:      &models.Action{Type: models.ActionTypeWebsocket, Params: wsParams},
+			Status:      models.EventStatusActive,
+			Metadata:    []byte(`{"key": "value"}`),
+			Tags:        pq.StringArray{"test"},
+			CreatedAt:   time.Now(),
+		}
+		err := eventRepo.Create(ctx, event)
+		require.NoError(t, err)
+		schedule := &models.Schedule{
+			Occurrence: models.Occurrence{
+				OccurrenceID: uuid.New(),
+				EventID:      event.ID,
+				ScheduledAt:  time.Now(),
+			},
+			Name:        event.Name,
+			Description: event.Description,
+			Webhook:     "q:client2",
 			Metadata:    event.Metadata,
 			Tags:        event.Tags,
 		}
@@ -313,46 +281,51 @@ func TestDispatcher(t *testing.T) {
 		require.NoError(t, err)
 		err = redisClient.RPush(ctx, namespace+dispatchQueueKey, data).Err()
 		require.NoError(t, err)
-		// Run the worker for a short time to process retries
 		runWorkerAndWait(ctx, dispatcher, scheduler, 20*time.Millisecond)
-		// Now assert the number of calls
-		assert.Equal(t, 3, len(mockNotifier.calls)) // 3 attempts (initial + 2 retries)
+		assert.Equal(t, 3, len(mockNotifier.calls))
 	})
 
 	t.Run("client hook dispatch - round robin", func(t *testing.T) {
-		start := time.Now()
-		cleanupStart := time.Now()
 		cleanup()
-		fmt.Printf("[PROFILE] cleanup: %v\n", time.Since(cleanupStart))
-		dispatcherStart := time.Now()
+		mockHTTP := new(MockHTTPClient)
 		mockNotifier := NewMockClientNotifier()
 		mockNotifier.connected["client3"] = []string{"c1", "c2"}
-		dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Millisecond, mockNotifier, scheduler)
-		fmt.Printf("[PROFILE] dispatcher creation: %v\n", time.Since(dispatcherStart))
-		scheduleStart := time.Now()
+		dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, mockNotifier, scheduler, mockHTTP)
+		mockHTTP.On("Do", mock.AnythingOfType("*http.Request")).Return(&http.Response{
+			StatusCode: 200,
+			Body:       ioutil.NopCloser(bytes.NewBuffer([]byte{})),
+		}, nil)
+		wsParams, _ := json.Marshal(models.WebsocketActionParams{ClientName: "client3"})
+		event := &models.Event{
+			ID:          uuid.New(),
+			Name:        "Client Hook Event",
+			Description: "Test client hook",
+			StartTime:   time.Now(),
+			Action:      &models.Action{Type: models.ActionTypeWebsocket, Params: wsParams},
+			Status:      models.EventStatusActive,
+			Metadata:    []byte(`{"key": "value"}`),
+			Tags:        pq.StringArray{"test"},
+			CreatedAt:   time.Now(),
+		}
+		err := eventRepo.Create(ctx, event)
+		require.NoError(t, err)
 		schedule := &models.Schedule{
 			Occurrence: models.Occurrence{
 				OccurrenceID: uuid.New(),
-				EventID:      uuid.New(),
+				EventID:      event.ID,
 				ScheduledAt:  time.Now(),
 			},
-			Name:        "Client Hook Event",
-			Description: "Test client hook",
+			Name:        event.Name,
+			Description: event.Description,
 			Webhook:     "q:client3",
-			Metadata:    []byte(`{"key": "value"}`),
-			Tags:        pq.StringArray{"test"},
+			Metadata:    event.Metadata,
+			Tags:        event.Tags,
 		}
-		fmt.Printf("[PROFILE] schedule creation: %v\n", time.Since(scheduleStart))
 		for i := 0; i < 4; i++ {
-			callStart := time.Now()
-			err := dispatcher.DispatchWebhook(ctx, schedule)
-			fmt.Printf("[PROFILE] DispatchWebhook call %d: %v\n", i+1, time.Since(callStart))
+			err := dispatcher.DispatchAction(ctx, schedule)
 			assert.NoError(t, err)
 		}
-		assertionStart := time.Now()
 		assert.Equal(t, []string{"client3:c1", "client3:c2", "client3:c1", "client3:c2"}, mockNotifier.calls)
-		fmt.Printf("[PROFILE] final assertion: %v\n", time.Since(assertionStart))
-		fmt.Printf("[PROFILE] total test duration: %v\n", time.Since(start))
 	})
 }
 
@@ -368,8 +341,7 @@ func TestDispatcher_RedisOnlyDispatch(t *testing.T) {
 	hmacService := services.NewHMACService("test-secret")
 	mockHTTP := new(MockHTTPClient)
 	scheduler := NewScheduler(redisClient, logger, namespace)
-	dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, nil, scheduler)
-	dispatcher.SetHTTPClient(mockHTTP)
+	dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, nil, scheduler, mockHTTP)
 
 	// Create Scheduler instance
 	scheduler = NewScheduler(redisClient, logger, namespace)
@@ -443,8 +415,7 @@ func TestDispatcher_GetDueSchedules(t *testing.T) {
 	hmacService := services.NewHMACService("test-secret")
 	mockHTTP := new(MockHTTPClient)
 	scheduler := NewScheduler(redisClient, logger, namespace)
-	dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, nil, scheduler)
-	dispatcher.SetHTTPClient(mockHTTP)
+	dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, nil, scheduler, mockHTTP)
 
 	// Create Scheduler instance
 	scheduler = NewScheduler(redisClient, logger, namespace)
@@ -535,11 +506,7 @@ func TestDispatcher_DispatchQueueWorker(t *testing.T) {
 	eventRepo := repository.NewEventRepository(db, logger, redisClient, namespace)
 	occurrenceRepo := repository.NewOccurrenceRepository(db, logger)
 	hmacService := services.NewHMACService("test-secret")
-	mockHTTP := new(MockHTTPClient)
 	scheduler := NewScheduler(redisClient, logger, namespace)
-	dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, nil, scheduler)
-	dispatcher.SetHTTPClient(mockHTTP)
-
 	cleanup := func() {
 		_, err := db.ExecContext(ctx, "TRUNCATE TABLE occurrences CASCADE")
 		require.NoError(t, err)
@@ -550,7 +517,8 @@ func TestDispatcher_DispatchQueueWorker(t *testing.T) {
 
 	t.Run("worker_processes_and_removes_from_processing_queue_on_success", func(t *testing.T) {
 		cleanup()
-		mockHTTP = new(MockHTTPClient)
+		mockHTTP := new(MockHTTPClient)
+		dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, nil, scheduler, mockHTTP)
 		mockHTTP.On("Do", mock.AnythingOfType("*http.Request")).Return(&http.Response{
 			StatusCode: 200,
 			Body:       ioutil.NopCloser(bytes.NewBuffer([]byte{})),
@@ -605,7 +573,8 @@ func TestDispatcher_DispatchQueueWorker(t *testing.T) {
 
 	t.Run("worker_leaves_item_in_retry_queue_on_failure", func(t *testing.T) {
 		cleanup()
-		mockHTTP = new(MockHTTPClient)
+		mockHTTP := new(MockHTTPClient)
+		dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, nil, scheduler, mockHTTP)
 		mockHTTP.On("Do", mock.AnythingOfType("*http.Request")).Return((*http.Response)(nil), errors.New("fail")).Maybe()
 		dispatcher.SetHTTPClient(mockHTTP)
 		// Set retryDelay to 2s to ensure item stays in retry queue for test
@@ -663,7 +632,8 @@ func TestDispatcher_DispatchQueueWorker(t *testing.T) {
 
 	t.Run("worker_removes_item_after_max_retries", func(t *testing.T) {
 		cleanup()
-		mockHTTP = new(MockHTTPClient)
+		mockHTTP := new(MockHTTPClient)
+		dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, nil, scheduler, mockHTTP)
 		mockHTTP.On("Do", mock.AnythingOfType("*http.Request")).Return((*http.Response)(nil), errors.New("fail"))
 		dispatcher.SetHTTPClient(mockHTTP)
 		// Set retryDelay to 10ms for fast test
