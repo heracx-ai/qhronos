@@ -327,6 +327,52 @@ func TestDispatcher(t *testing.T) {
 		}
 		assert.Equal(t, []string{"client3:c1", "client3:c2", "client3:c1", "client3:c2"}, mockNotifier.calls)
 	})
+
+	t.Run("auto-inactivate recurring event when count is reached", func(t *testing.T) {
+		cleanup()
+		mockHTTP := new(MockHTTPClient)
+		dispatcher := NewDispatcher(eventRepo, occurrenceRepo, hmacService, logger, 3, 5*time.Second, nil, scheduler, mockHTTP)
+		mockHTTP.On("Do", mock.AnythingOfType("*http.Request")).Return(&http.Response{
+			StatusCode: 200,
+			Body:       ioutil.NopCloser(bytes.NewBuffer([]byte{})),
+		}, nil)
+		whParams, _ := json.Marshal(models.WebhookActionParams{URL: "http://example.com/webhook"})
+		count := 2
+		event := &models.Event{
+			ID:          uuid.New(),
+			Name:        "Recurring Event",
+			Description: "Test recurring event with count limit",
+			StartTime:   time.Now(),
+			Action:      &models.Action{Type: models.ActionTypeWebhook, Params: whParams},
+			Status:      models.EventStatusActive,
+			Metadata:    []byte(`{"key": "value"}`),
+			Tags:        pq.StringArray{"test"},
+			CreatedAt:   time.Now(),
+			Schedule:    &models.ScheduleConfig{Frequency: "daily", Interval: 1, Count: &count},
+		}
+		err := eventRepo.Create(ctx, event)
+		require.NoError(t, err)
+		for i := 0; i < 2; i++ {
+			schedule := &models.Schedule{
+				Occurrence: models.Occurrence{
+					OccurrenceID: uuid.New(),
+					EventID:      event.ID,
+					ScheduledAt:  time.Now().Add(time.Duration(i) * time.Hour),
+				},
+				Name:        event.Name,
+				Description: event.Description,
+				Webhook:     "http://example.com/webhook",
+				Metadata:    event.Metadata,
+				Tags:        event.Tags,
+			}
+			err = dispatcher.DispatchAction(ctx, schedule)
+			assert.NoError(t, err)
+		}
+		// After two completions, event should be inactive
+		updatedEvent, err := eventRepo.GetByID(ctx, event.ID)
+		require.NoError(t, err)
+		assert.Equal(t, models.EventStatusInactive, updatedEvent.Status)
+	})
 }
 
 func TestDispatcher_RedisOnlyDispatch(t *testing.T) {

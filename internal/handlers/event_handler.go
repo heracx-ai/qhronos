@@ -358,7 +358,7 @@ func isValidSchedule(schedule *models.ScheduleConfig) bool {
 
 	// Validate frequency
 	switch schedule.Frequency {
-	case "daily", "weekly", "monthly", "yearly":
+	case "minutely", "hourly", "daily", "weekly", "monthly", "yearly":
 		// Valid frequency
 	default:
 		return false
