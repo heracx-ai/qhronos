@@ -384,4 +384,44 @@ func TestEventExpander(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotEmpty(t, results)
 	})
+
+	t.Run("minutely frequency event expansion is idempotent", func(t *testing.T) {
+		cleanup()
+		startTime := time.Now().Add(-2 * time.Minute).Truncate(time.Minute)
+		// Create a minutely schedule
+		scheduleConfig := &models.ScheduleConfig{
+			Frequency: "minutely",
+			Interval:  1,
+		}
+		event := &models.Event{
+			ID:          uuid.New(),
+			Name:        "Minutely Event",
+			Description: "Test minutely event for idempotency",
+			StartTime:   startTime,
+			Webhook:     "http://example.com",
+			Schedule:    scheduleConfig,
+			Status:      models.EventStatusActive,
+			Metadata:    []byte(`{"key": "value"}`),
+			Tags:        pq.StringArray{"test"},
+			CreatedAt:   time.Now(),
+		}
+		err := eventRepo.Create(ctx, event)
+		require.NoError(t, err)
+		// Run expansion twice
+		err = expander.ExpandEvents(ctx)
+		require.NoError(t, err)
+		err = expander.ExpandEvents(ctx)
+		require.NoError(t, err)
+		// Get all occurrences for this event from the DB
+		occurrences, err := occurrenceRepo.ListByEventID(ctx, event.ID)
+		require.NoError(t, err)
+		// There should be only one occurrence per scheduled time
+		scheduledTimes := make(map[int64]struct{})
+		for _, occ := range occurrences {
+			ts := occ.ScheduledAt.Unix()
+			_, exists := scheduledTimes[ts]
+			assert.False(t, exists, "Duplicate occurrence for scheduled time: %v", occ.ScheduledAt)
+			scheduledTimes[ts] = struct{}{}
+		}
+	})
 }

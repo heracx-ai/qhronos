@@ -204,3 +204,15 @@ func (r *OccurrenceRepository) GetLatestByOccurrenceID(ctx context.Context, occu
 	}
 	return &occurrence, nil
 }
+
+// CountCompletedByEventID returns the number of completed occurrences for a given event ID
+func (r *OccurrenceRepository) CountCompletedByEventID(ctx context.Context, eventID uuid.UUID) (int, error) {
+	var count int
+	query := `SELECT COUNT(*) FROM occurrences WHERE event_id = $1 AND status = 'completed'`
+	err := r.db.GetContext(ctx, &count, query, eventID)
+	if err != nil {
+		r.logger.Error("Error counting completed occurrences", zap.Error(err), zap.String("event_id", eventID.String()))
+		return 0, err
+	}
+	return count, nil
+}
