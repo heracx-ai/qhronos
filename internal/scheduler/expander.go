@@ -235,6 +235,16 @@ func (e *Expander) expandRecurringEvent(ctx context.Context, event *models.Event
 	e.logger.Debug("Found future occurrences for event", zap.String("event_id", event.ID.String()), zap.Int("count", len(occurrences)))
 
 	for _, t := range occurrences {
+		// Prevent duplicate occurrences: check if one already exists for this event and time
+		exists, err := e.occurrenceRepo.ExistsAtTime(ctx, event.ID, t)
+		if err != nil {
+			e.logger.Error("Failed to check for existing occurrence", zap.Error(err), zap.String("event_id", event.ID.String()), zap.Time("scheduled_at", t))
+			continue
+		}
+		if exists {
+			e.logger.Debug("Occurrence already exists, skipping", zap.String("event_id", event.ID.String()), zap.Time("scheduled_at", t))
+			continue
+		}
 		occurrence := &models.Occurrence{
 			OccurrenceID: uuid.New(),
 			EventID:      event.ID,

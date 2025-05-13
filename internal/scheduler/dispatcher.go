@@ -164,6 +164,31 @@ func (d *Dispatcher) DispatchAction(ctx context.Context, sched *models.Schedule)
 		}
 	}
 
+	// Auto-inactivate recurring events if count or until is reached
+	if event.Schedule != nil && event.Status == models.EventStatusActive && finalStatus == models.OccurrenceStatusCompleted {
+		shouldInactivate := false
+		if event.Schedule.Count != nil {
+			completedCount, err := d.occurrenceRepo.CountCompletedByEventID(ctx, event.ID)
+			if err == nil && completedCount >= *event.Schedule.Count {
+				shouldInactivate = true
+			}
+		}
+		if !shouldInactivate && event.Schedule.Until != nil {
+			untilTime, err := time.Parse(time.RFC3339, *event.Schedule.Until)
+			if err == nil && time.Now().After(untilTime) {
+				shouldInactivate = true
+			}
+		}
+		if shouldInactivate {
+			event.Status = models.EventStatusInactive
+			if err := d.eventRepo.Update(ctx, event); err != nil {
+				d.logger.Error("Failed to auto-inactivate recurring event", zap.String("event_id", event.ID.String()), zap.Error(err))
+			} else {
+				d.logger.Info("Auto-inactivated recurring event", zap.String("event_id", event.ID.String()))
+			}
+		}
+	}
+
 	return dispatchError // This error determines if it goes to retry queue
 }
 
