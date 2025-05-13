@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/feedloop/qhronos/internal/models"
 	"github.com/feedloop/qhronos/internal/services"
@@ -26,12 +27,13 @@ func NewWebhookExecutor(hmacService *services.HMACService, httpClient HTTPClient
 		}
 
 		payload := map[string]interface{}{
-			"event_id":     event.ID,
-			"name":         event.Name,
-			"description":  event.Description,
-			"scheduled_at": event.StartTime,
-			"metadata":     event.Metadata,
-			"tags":         event.Tags,
+			"event_id":     	event.ID,
+			"name":         	event.Name,
+			"description":  	event.Description,
+			"scheduled_at": 	event.StartTime,
+			"metadata":     	event.Metadata,
+			"tags":         	event.Tags,
+			"dispatched_at":  time.Now().UTC(),
 		}
 		jsonPayload, err := json.Marshal(payload)
 		if err != nil {
