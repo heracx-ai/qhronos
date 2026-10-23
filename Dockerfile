@@ -1,13 +1,13 @@
 # syntax=docker/dockerfile:1
 
 # Build stage
-FROM golang:1.24 AS builder
+FROM golang:1.26.10 AS builder
 WORKDIR /app
 COPY . .
 RUN make
 
 # Run stage
-FROM golang:1.24 AS hera-qhronos-production
+FROM golang:1.26.10 AS hera-qhronos-production
 WORKDIR /app
 COPY --from=builder /app/bin/qhronosd .
 COPY config.example.yml ./config.yml
